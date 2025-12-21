@@ -1,4 +1,4 @@
-package com.example.taka_dekho
+package com.tufaan.taka_dekho
 
 import io.flutter.embedding.android.FlutterActivity
 
