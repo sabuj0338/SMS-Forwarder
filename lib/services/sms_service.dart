@@ -4,7 +4,7 @@ import 'package:another_telephony/telephony.dart';
 import '../models/transaction.dart';
 import 'notification_service.dart';
 import 'tts_service.dart';
-import 'package:hive/hive.dart';
+import 'package:hive_flutter/hive_flutter.dart';
 import '../screens/full_screen_notification.dart';
 import 'package:flutter/material.dart';
 
@@ -23,6 +23,11 @@ class SmsService {
 
   /// CALL THIS ON APP START
   Future<void> init(GlobalKey<NavigatorState> navigatorKey) async {
+    // Open settings box if not open
+    if (!Hive.isBoxOpen('settings')) {
+      await Hive.openBox<List<String>>('settings');
+    }
+
     final granted = await telephony.requestSmsPermissions;
     if (granted != true) return;
 
@@ -82,10 +87,19 @@ class SmsService {
   }
 
   /// BACKGROUND (APP CLOSED)
+  /// BACKGROUND (APP CLOSED)
   @pragma('vm:entry-point')
   static void backgroundSmsHandler(SmsMessage sms) async {
+    // Initialize Hive for background isolate
+    await Hive.initFlutter();
+    final settingsBox = await Hive.openBox<List<String>>('settings');
+    final allowed =
+        settingsBox.get('allowed_addresses', defaultValue: ['16216']) ??
+        ['16216'];
+
     final service = SmsService();
-    final tx = service.parseTransactionSms(sms);
+    // parse with allowed list
+    final tx = service.parseTransactionSms(sms, allowedAddresses: allowed);
     if (tx == null) return;
 
     final box = await Hive.openBox<Transaction>('transactions');
@@ -96,11 +110,30 @@ class SmsService {
   }
 
   /// PARSE TRANSACTION SMS
-  Transaction? parseTransactionSms(SmsMessage sms) {
+  Transaction? parseTransactionSms(
+    SmsMessage sms, {
+    List<String>? allowedAddresses,
+  }) {
     final sender = sms.address?.toLowerCase() ?? "";
     final body = sms.body?.toLowerCase() ?? "";
 
-    if (!sender.contains("16216")) {
+    // Get allowed addresses from Hive if not provided
+    List<String> allowed;
+    if (allowedAddresses != null) {
+      allowed = allowedAddresses;
+    } else {
+      final settingsBox = Hive.box<List<String>>('settings');
+      allowed =
+          settingsBox.get('allowed_addresses', defaultValue: ['16216']) ??
+          ['16216'];
+    }
+
+    // Check if sender matches any allowed address case-insensitively
+    final isAllowed = allowed.any(
+      (addr) => sender.contains(addr.toLowerCase()),
+    );
+
+    if (!isAllowed) {
       return null;
     }
 
@@ -110,7 +143,9 @@ class SmsService {
       name: "sms_service",
     );
 
-    final amountMatch = RegExp(r'tk\s?([\d,]+(?:\.\d+)?)').firstMatch(body);
+    final amountMatch = RegExp(
+      r'(?:tk|bdt)\s?([\d,]+(?:\.\d+)?)',
+    ).firstMatch(body);
 
     if (amountMatch == null) {
       developer.log("Amount not found", name: "sms_service");
@@ -137,12 +172,22 @@ class SmsService {
     return Transaction(
       amount: amount,
       isCredit: isCredit,
-      source: sender.contains("16216") ? "NexusPay" : "Unknown",
+      source: _getSourceName(sender),
       time: DateTime.fromMillisecondsSinceEpoch(sms.date ?? 0),
     );
   }
 
   bool _exists(Transaction tx) {
     return box.values.any((e) => e.amount == tx.amount && e.time == tx.time);
+  }
+
+  String _getSourceName(String sender) {
+    // simple mapping or return the sender itself formatted
+    if (sender.contains("16216")) return "NexusPay";
+    if (sender.contains("bkash")) return "bKash";
+    if (sender.contains("nagad")) return "Nagad";
+    // Fallback: return the sender string nicely formatted if possible, or just the stored matching address
+    // For now, let's return the sender (capitalized if possible)
+    return sender.toUpperCase();
   }
 }

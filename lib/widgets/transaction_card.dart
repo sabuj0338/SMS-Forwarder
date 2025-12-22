@@ -12,10 +12,10 @@ class TransactionCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final color = tx.isCredit ? Colors.green.shade700 : Colors.red.shade700;
     final bgColor = tx.isCredit ? Colors.green.shade50 : Colors.red.shade50;
-    final icon = tx.isCredit
-        ? Icons.arrow_downward
-        : Icons
-              .arrow_upward; // In banking, Credit is usually money coming in (down into account?), Debit is going out (up?).
+    // final icon = tx.isCredit
+    //     ? Icons.arrow_downward
+    //     : Icons
+    //           .arrow_upward; // In banking, Credit is usually money coming in (down into account?), Debit is going out (up?).
     // Start with simplistic: Credit = Received (Arrow Down/In), Debit = Sent (Arrow Up/Out).
     // Actually, usually Arrow Down = Download/Receive, Arrow Up = Upload/Send.
     // Let's stick to the User's "Green -> Money Received", "Red -> Money Sent".
@@ -25,20 +25,25 @@ class TransactionCard extends StatelessWidget {
         context,
         MaterialPageRoute(builder: (_) => TransactionDetailScreen(tx: tx)),
       ),
-      child: Container(
-        margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-        decoration: BoxDecoration(
-          color: Colors.white,
+      child: Card(
+        color: Colors.white,
+        shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(16),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withOpacity(0.05),
-              blurRadius: 10,
-              offset: const Offset(0, 4),
-            ),
-          ],
-          border: Border.all(color: color.withOpacity(0.3), width: 1),
+          side: BorderSide(color: color.withValues(alpha: 0.3), width: 1),
         ),
+        margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        // decoration: BoxDecoration(
+        //   color: Colors.white,
+        //   borderRadius: BorderRadius.circular(16),
+        //   boxShadow: [
+        //     BoxShadow(
+        //       color: Colors.black.withOpacity(0.05),
+        //       blurRadius: 10,
+        //       offset: const Offset(0, 4),
+        //     ),
+        //   ],
+        //   border: Border.all(color: color.withOpacity(0.3), width: 1),
+        // ),
         child: ClipRRect(
           borderRadius: BorderRadius.circular(16),
           child: Banner(
@@ -55,7 +60,7 @@ class TransactionCard extends StatelessWidget {
                 children: [
                   // Icon
                   Container(
-                    padding: const EdgeInsets.all(12),
+                    padding: const EdgeInsets.all(8),
                     decoration: BoxDecoration(
                       color: bgColor,
                       shape: BoxShape.circle,
@@ -82,7 +87,7 @@ class TransactionCard extends StatelessWidget {
                         ),
                         const SizedBox(height: 4),
                         Text(
-                          DateFormat('dd MMM, hh:mm a').format(tx.time),
+                          DateFormat('dd-MM-yyyy, hh:mm a').format(tx.time),
                           style: TextStyle(
                             color: Colors.grey.shade600,
                             fontSize: 14,
