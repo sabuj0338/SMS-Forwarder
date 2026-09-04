@@ -267,15 +267,29 @@ Add these repository secrets (**Settings → Secrets and variables → Actions**
 
 `android/key.properties` and `*.jks` are gitignored — keep signing material out of git.
 
-### 2. Google Drive secrets
+### 2. Google Drive secrets (OAuth)
 
-1. In [Google Cloud Console](https://console.cloud.google.com/), create a project (or reuse one).
-2. Enable the **Google Drive API**.
-3. Create a **service account**, then create a JSON key.
-4. Paste the **full JSON** into a secret named `GDRIVE_CREDENTIALS`.
-5. Create a Drive folder for APKs (prefer a **Shared drive** so the service account has quota).
-6. Share that folder with the service account email (`client_email` in the JSON) as **Editor**.
-7. Copy the folder ID from the URL (`…/folders/<FOLDER_ID>`) into secret `GDRIVE_FOLDER_ID`.
+Service accounts **cannot** upload to personal Drive (no storage quota). Use OAuth instead.
+
+1. In [Google Cloud Console](https://console.cloud.google.com/), create/select a project and enable **Google Drive API**.
+2. **APIs & Services → OAuth consent screen** → External → fill app name + your email → add scope `https://www.googleapis.com/auth/drive` → add yourself as a test user.
+3. **Credentials → Create credentials → OAuth client ID** → type **Web application**.
+4. Add authorized redirect URI: `https://developers.google.com/oauthplayground` → Create. Copy **Client ID** and **Client Secret**.
+5. Open [OAuth 2.0 Playground](https://developers.google.com/oauthplayground/):
+   - Gear ⚙️ → check **Use your own OAuth credentials** → paste Client ID + Secret
+   - Select **Drive API v3** → `https://www.googleapis.com/auth/drive` → **Authorize APIs**
+   - **Exchange authorization code for tokens** → copy `refresh_token`
+6. Create a Drive folder for APKs. Folder ID is the part after `/folders/` in the URL.
+7. Add GitHub secrets:
+
+| Secret | Value |
+|--------|--------|
+| `GOOGLE_CLIENT_ID` | OAuth client ID |
+| `GOOGLE_CLIENT_SECRET` | OAuth client secret |
+| `GOOGLE_REFRESH_TOKEN` | Refresh token from Playground |
+| `GDRIVE_FOLDER_ID` | Drive folder ID |
+
+You can delete the old `GDRIVE_CREDENTIALS` service-account secret — it is no longer used.
 
 ### 3. Run it
 
