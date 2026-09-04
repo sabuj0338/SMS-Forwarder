@@ -1,0 +1,90 @@
+name: Build APK & Upload to Google Drive
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  workflow_dispatch:
+
+concurrency:
+  group: build-apk-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-upload:
+    name: Build release APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Decode release keystore
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+        run: |
+          if [ -z "$KEYSTORE_BASE64" ] || [ -z "$STORE_PASSWORD" ] || [ -z "$KEY_PASSWORD" ] || [ -z "$KEY_ALIAS" ]; then
+            echo "Missing signing secrets. Required: KEYSTORE_BASE64, KEYSTORE_PASSWORD, KEY_PASSWORD, KEY_ALIAS"
+            exit 1
+          fi
+          echo "$KEYSTORE_BASE64" | base64 --decode > android/upload-keystore.jks
+          {
+            echo "storePassword=${STORE_PASSWORD}"
+            echo "keyPassword=${KEY_PASSWORD}"
+            echo "keyAlias=${KEY_ALIAS}"
+            echo "storeFile=../upload-keystore.jks"
+          } > android/key.properties
+
+      - name: Build release APK
+        run: flutter build apk --release
+
+      - name: Prepare artifact name
+        id: meta
+        run: |
+          VERSION=$(grep '^version:' pubspec.yaml | sed 's/version: //' | tr -d '[:space:]')
+          SAFE_VERSION=$(echo "$VERSION" | tr '+/' '--')
+          if [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            NAME="sms-forwarder-${{ github.ref_name }}.apk"
+          else
+            NAME="sms-forwarder-${SAFE_VERSION}-${{ github.run_number }}.apk"
+          fi
+          echo "apk_name=$NAME" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          cp build/app/outputs/flutter-apk/app-release.apk "$NAME"
+
+      - name: Upload APK to GitHub Actions artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.meta.outputs.apk_name }}
+          path: ${{ steps.meta.outputs.apk_name }}
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload APK to Google Drive
+        uses: Jumbo810/Upload_Github_Artifacts_TO_GDrive@v2.3.5
+        with:
+          target: ${{ steps.meta.outputs.apk_name }}
+          credentials: ${{ secrets.GDRIVE_CREDENTIALS }}
+          parent_folder_id: ${{ secrets.GDRIVE_FOLDER_ID }}

@@ -1,0 +1,41 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" role="img" aria-label="SMS Forwarder">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#14B8A6"/>
+      <stop offset="100%" stop-color="#0F766E"/>
+    </linearGradient>
+    <linearGradient id="bubble" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#FFFFFF"/>
+      <stop offset="100%" stop-color="#F0FDFA"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Full-bleed background (OS applies mask / rounded corners) -->
+  <rect width="1024" height="1024" fill="url(#bg)"/>
+
+  <!-- Subtle top highlight -->
+  <ellipse cx="512" cy="-40" rx="620" ry="420" fill="#FFFFFF" opacity="0.10"/>
+
+  <!-- Message bubble (safe zone ~66% center) -->
+  <path
+    d="M248 300c0-44 36-80 80-80h368c44 0 80 36 80 80v248c0 44-36 80-80 80H456l-96 88v-88h-32c-44 0-80-36-80-80V300Z"
+    fill="url(#bubble)"
+  />
+
+  <!-- Message lines -->
+  <rect x="328" y="360" width="320" height="36" rx="18" fill="#0D9488" opacity="0.85"/>
+  <rect x="328" y="432" width="248" height="36" rx="18" fill="#0D9488" opacity="0.55"/>
+  <rect x="328" y="504" width="176" height="36" rx="18" fill="#0D9488" opacity="0.35"/>
+
+  <!-- Forward badge -->
+  <circle cx="704" cy="648" r="96" fill="#0F766E"/>
+  <circle cx="704" cy="648" r="96" fill="none" stroke="#5EEAD4" stroke-width="8" opacity="0.55"/>
+  <path
+    d="M668 648h56m0 0-28-28m28 28-28 28"
+    fill="none"
+    stroke="#FFFFFF"
+    stroke-width="28"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  />
+</svg>

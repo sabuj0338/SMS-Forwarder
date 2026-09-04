@@ -1,193 +1,171 @@
+import 'dart:async';
+import 'dart:convert';
 import 'dart:developer' as developer;
 
 import 'package:another_telephony/telephony.dart';
-import '../models/transaction.dart';
-import 'notification_service.dart';
-import 'tts_service.dart';
-import 'package:hive_flutter/hive_flutter.dart';
-import '../screens/full_screen_notification.dart';
-import 'package:flutter/material.dart';
+import 'package:crypto/crypto.dart';
+import 'package:flutter/foundation.dart';
+import 'package:uuid/uuid.dart';
 
-// This class handles SMS related operations
-// Primary focus is to read SMS and parse it to Transaction object
-// and save it to Hive box
-// and listen for new SMS and parse it to Transaction object
+import '../models/forward_status.dart';
+import '../models/queued_sms.dart';
+import 'connectivity_service.dart';
+import 'forward_service.dart';
+import 'hive_bootstrap.dart';
+import 'settings_service.dart';
+import 'sms_filter.dart';
+import 'sms_parser.dart';
+
 class SmsService {
   static final SmsService _instance = SmsService._internal();
   factory SmsService() => _instance;
   SmsService._internal();
 
   final Telephony telephony = Telephony.instance;
-  final Box<Transaction> box = Hive.box<Transaction>('transactions');
-  final ValueNotifier<bool> isLoading = ValueNotifier(false);
+  final ValueNotifier<bool> isListening = ValueNotifier(false);
+  final ValueNotifier<bool> isBackfilling = ValueNotifier(false);
+  static const _uuid = Uuid();
 
-  /// CALL THIS ON APP START
-  Future<void> init(GlobalKey<NavigatorState> navigatorKey) async {
-    // Open settings box if not open
-    if (!Hive.isBoxOpen('settings')) {
-      await Hive.openBox<List<String>>('settings');
-    }
+  bool _listening = false;
 
+  Future<void> init() async {
     final granted = await telephony.requestSmsPermissions;
-    if (granted != true) return;
-
-    // Listen for new SMS
-    initSmsListener(navigatorKey);
-
-    // Read old SMS in background
-    _readOldSms();
-  }
-
-  /// 1️⃣ READ EXISTING SMS
-  Future<void> _readOldSms() async {
-    isLoading.value = true;
-    try {
-      final messages = await telephony.getInboxSms(
-        // columns: [SmsColumn.ADDRESS, SmsColumn.BODY, SmsColumn.DATE],
-        sortOrder: [OrderBy(SmsColumn.DATE, sort: Sort.DESC)],
-        // filter: SmsFilter.where(SmsColumn.ADDRESS).equals("16216"), // Removed strict filter to allow broad scanning
-      );
-
-      for (final sms in messages) {
-        final tx = parseTransactionSms(sms);
-
-        if (tx != null && !_exists(tx)) {
-          box.add(tx);
-        }
-      }
-    } catch (e) {
-      developer.log("Error reading SMS: $e", name: "sms_service");
-    } finally {
-      isLoading.value = false;
+    if (granted != true) {
+      isListening.value = false;
+      developer.log('SMS permission denied', name: 'sms');
+      return;
     }
+
+    _ensureListener();
+    isListening.value = true;
+    unawaited(backfillRecentInbox());
   }
 
-  void initSmsListener(GlobalKey<NavigatorState> navigatorKey) async {
-    bool? granted = await telephony.requestSmsPermissions;
-    if (granted != true) return;
-
+  void _ensureListener() {
+    if (_listening) return;
+    _listening = true;
     telephony.listenIncomingSms(
       onNewMessage: (SmsMessage sms) {
-        Transaction? tx = parseTransactionSms(sms);
-        if (tx == null) return;
-
-        // add to hive but top of the list
-        box.add(tx);
-
-        // Navigate to full-screen notification
-        navigatorKey.currentState?.push(
-          MaterialPageRoute(builder: (_) => FullScreenNotification(tx: tx)),
-        );
-
-        // Speak transaction
-        TtsService.speakTransaction(tx);
+        unawaited(_handleSms(sms));
       },
       onBackgroundMessage: backgroundSmsHandler,
+      listenInBackground: true,
     );
   }
 
-  /// BACKGROUND (APP CLOSED)
-  /// BACKGROUND (APP CLOSED)
-  @pragma('vm:entry-point')
-  static void backgroundSmsHandler(SmsMessage sms) async {
-    // Initialize Hive for background isolate
-    await Hive.initFlutter();
-    final settingsBox = await Hive.openBox<List<String>>('settings');
-    final allowed =
-        settingsBox.get('allowed_addresses', defaultValue: ['16216']) ??
-        ['16216'];
-
-    final service = SmsService();
-    // parse with allowed list
-    final tx = service.parseTransactionSms(sms, allowedAddresses: allowed);
-    if (tx == null) return;
-
-    final box = await Hive.openBox<Transaction>('transactions');
-    // add to hive but top of the list
-    box.add(tx);
-    NotificationService.show(tx);
-    TtsService.speakTransaction(tx);
+  Future<void> _handleSms(SmsMessage sms, {bool triggerFlush = true}) async {
+    final queued = _toQueued(sms);
+    if (queued == null) return;
+    await ForwardService().enqueue(queued, triggerFlush: triggerFlush);
   }
 
-  /// PARSE TRANSACTION SMS
-  Transaction? parseTransactionSms(
-    SmsMessage sms, {
-    List<String>? allowedAddresses,
+  /// Prefer TxnID uniqueness; else sender+body+minute so redeliveries dedupe
+  /// but two real payments a minute apart still enqueue.
+  static String contentHash(
+    String sender,
+    String body, {
+    String? txnId,
+    DateTime? receivedAt,
   }) {
-    final sender = sms.address?.toLowerCase() ?? "";
-    final body = sms.body?.toLowerCase() ?? "";
+    if (txnId != null && txnId.isNotEmpty) {
+      return sha256.convert(utf8.encode('$sender|txn|$txnId')).toString();
+    }
+    final minute =
+        (receivedAt ?? DateTime.now()).millisecondsSinceEpoch ~/ 60000;
+    return sha256.convert(utf8.encode('$sender|$body|$minute')).toString();
+  }
 
-    // Get allowed addresses from Hive if not provided
-    List<String> allowed;
-    if (allowedAddresses != null) {
-      allowed = allowedAddresses;
-    } else {
-      final settingsBox = Hive.box<List<String>>('settings');
-      allowed =
-          settingsBox.get('allowed_addresses', defaultValue: ['16216']) ??
-          ['16216'];
+  QueuedSms? _toQueued(SmsMessage sms) {
+    final sender = sms.address ?? '';
+    final body = sms.body ?? '';
+    if (sender.isEmpty || body.isEmpty) return null;
+
+    if (!MessageFilter.matches(sender: sender, body: body)) {
+      return null;
     }
 
-    // Check if sender matches any allowed address case-insensitively
-    final isAllowed = allowed.any(
-      (addr) => sender.contains(addr.toLowerCase()),
+    final receivedAt = DateTime.fromMillisecondsSinceEpoch(
+      sms.date ?? DateTime.now().millisecondsSinceEpoch,
     );
 
-    if (!isAllowed) {
-      return null;
-    }
+    final parsed = SettingsService.structuredParseEnabled
+        ? SmsParser.parse(body)
+        : null;
 
-    // log the found sms
-    developer.log(
-      "Found sms: ${sms.address} - ${sms.body}",
-      name: "sms_service",
-    );
-
-    final amountMatch = RegExp(
-      r'(?:tk|bdt)\s?([\d,]+(?:\.\d+)?)',
-    ).firstMatch(body);
-
-    if (amountMatch == null) {
-      developer.log("Amount not found", name: "sms_service");
-      return null;
-    }
-
-    final amount = double.parse(amountMatch.group(1)!.replaceAll(',', ''));
-
-    final isCredit =
-        body.contains("received") ||
-        body.contains("credited") ||
-        body.contains("পেয়েছেন");
-
-    final isDebit =
-        body.contains("sent") ||
-        body.contains("debited") ||
-        body.contains("পাঠানো");
-
-    if (!isCredit && !isDebit) {
-      developer.log("Not credit or debit", name: "sms_service");
-      return null;
-    }
-
-    return Transaction(
-      amount: amount,
-      isCredit: isCredit,
-      source: _getSourceName(sender),
-      time: DateTime.fromMillisecondsSinceEpoch(sms.date ?? 0),
+    return QueuedSms(
+      id: _uuid.v4(),
+      sender: sender,
+      body: body,
+      receivedAt: receivedAt,
+      status: ForwardStatus.pending,
+      payloadHash: contentHash(
+        sender,
+        body,
+        txnId: parsed?.txnId,
+        receivedAt: receivedAt,
+      ),
+      amount: parsed?.amount,
+      txnId: parsed?.txnId,
+      txnType: parsed?.type,
+      counterparty: parsed?.counterparty,
     );
   }
 
-  bool _exists(Transaction tx) {
-    return box.values.any((e) => e.amount == tx.amount && e.time == tx.time);
+  /// Catch SMS received while the process was dead (reboot / force-stop).
+  Future<void> backfillRecentInbox({
+    Duration lookback = const Duration(hours: 72),
+    int maxMessages = 400,
+  }) async {
+    if (isBackfilling.value) return;
+    isBackfilling.value = true;
+    try {
+      final granted = await telephony.requestSmsPermissions;
+      if (granted != true) return;
+
+      final sinceMs =
+          DateTime.now().subtract(lookback).millisecondsSinceEpoch;
+
+      final messages = await telephony.getInboxSms(
+        columns: [SmsColumn.ADDRESS, SmsColumn.BODY, SmsColumn.DATE],
+        sortOrder: [OrderBy(SmsColumn.DATE, sort: Sort.DESC)],
+      );
+
+      var scanned = 0;
+      for (final sms in messages) {
+        scanned++;
+        if (scanned > maxMessages) break;
+        final date = sms.date ?? 0;
+        if (date < sinceMs) break;
+        await _handleSms(sms, triggerFlush: false);
+      }
+
+      developer.log('Inbox backfill scanned=$scanned', name: 'sms');
+      await ForwardService().recoverAndFlush();
+    } catch (e, st) {
+      developer.log('Inbox backfill error: $e', name: 'sms', stackTrace: st);
+    } finally {
+      isBackfilling.value = false;
+    }
   }
 
-  String _getSourceName(String sender) {
-    // simple mapping or return the sender itself formatted
-    if (sender.contains("16216")) return "NexusPay";
-    if (sender.contains("bkash")) return "bKash";
-    if (sender.contains("nagad")) return "Nagad";
-    // Fallback: return the sender string nicely formatted if possible, or just the stored matching address
-    // For now, let's return the sender (capitalized if possible)
-    return sender.toUpperCase();
+  @pragma('vm:entry-point')
+  static Future<void> backgroundSmsHandler(SmsMessage sms) async {
+    try {
+      await HiveBootstrap.ensureReady();
+      // Ensure settings keys exist in this isolate's box view.
+      await SettingsService.init();
+      await ConnectivityService().refresh();
+
+      final service = SmsService();
+      final queued = service._toQueued(sms);
+      if (queued == null) return;
+      await ForwardService().enqueue(queued, triggerFlush: true);
+    } catch (e, st) {
+      developer.log(
+        'Background SMS handler error: $e',
+        name: 'sms',
+        stackTrace: st,
+      );
+    }
   }
 }

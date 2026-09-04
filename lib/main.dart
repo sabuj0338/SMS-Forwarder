@@ -1,36 +1,120 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
-import 'package:hive_flutter/hive_flutter.dart';
+import 'package:flutter_foreground_task/flutter_foreground_task.dart';
+
 import 'screens/home_screen.dart';
-import 'models/transaction.dart';
-import 'services/notification_service.dart';
+import 'screens/lock_screen.dart';
+import 'services/app_lock_service.dart';
+import 'services/battery_service.dart';
+import 'services/connectivity_service.dart';
+import 'services/foreground_service.dart';
+import 'services/forward_service.dart';
+import 'services/hive_bootstrap.dart';
+import 'services/settings_service.dart';
 import 'services/sms_service.dart';
+import 'theme/app_theme.dart';
 
-final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
-
-void main() async {
+Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await Hive.initFlutter();
-  Hive.registerAdapter(TransactionAdapter());
-  await Hive.openBox<Transaction>('transactions');
 
-  await NotificationService.init();
-  await NotificationService.requestPermissions();
-  await SmsService().init(navigatorKey);
+  final fg = ForegroundService();
+  fg.initCommunication();
 
-  runApp(TakaDekho());
+  await HiveBootstrap.ensureReady();
+  await SettingsService.init();
+  AppLockService().init();
+
+  await ConnectivityService().init();
+  await ForwardService().recoverStuckSending();
+  await SmsService().init();
+  await fg.init();
+  fg.bindCallbacks();
+
+  unawaited(ForwardService().recoverAndFlush());
+  unawaited(BatteryService().refresh());
+
+  runApp(const SmsForwarderApp());
 }
 
-class TakaDekho extends StatelessWidget {
-  const TakaDekho({super.key});
+class SmsForwarderApp extends StatefulWidget {
+  const SmsForwarderApp({super.key});
+
+  @override
+  State<SmsForwarderApp> createState() => _SmsForwarderAppState();
+}
+
+class _SmsForwarderAppState extends State<SmsForwarderApp>
+    with WidgetsBindingObserver {
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      final fg = ForegroundService();
+      await fg.start();
+      await BatteryService().refresh();
+      // Second-chance backfill after UI is up (permissions dialogs settled).
+      unawaited(SmsService().backfillRecentInbox());
+      unawaited(ForwardService().recoverAndFlush());
+    });
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // App lock is UI-only — SMS receiver + FG service keep running.
+    if (state == AppLifecycleState.paused) {
+      AppLockService().lockIfEnabled();
+      // Persist any in-flight Hive writes before process may be frozen.
+      unawaited(ForwardService().recoverStuckSending());
+    }
+    if (state == AppLifecycleState.resumed) {
+      unawaited(_onResume());
+    }
+  }
+
+  Future<void> _onResume() async {
+    await BatteryService().refresh();
+    await ConnectivityService().refresh();
+    final fg = ForegroundService();
+    await fg.refreshRunningState();
+    if (!fg.isRunning.value) {
+      await fg.start();
+    }
+    await ForwardService().recoverStuckSending();
+    unawaited(SmsService().backfillRecentInbox());
+    unawaited(ForwardService().recoverAndFlush());
+  }
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'TakaDekho',
-      navigatorKey: navigatorKey,
-      debugShowCheckedModeBanner: false,
-      theme: ThemeData(primarySwatch: Colors.green),
-      home: HomeScreen(),
+    return ValueListenableBuilder(
+      valueListenable: SettingsService.listenable(),
+      builder: (context, box, child) {
+        return MaterialApp(
+          title: 'SMS Forwarder',
+          debugShowCheckedModeBanner: false,
+          theme: AppTheme.light(),
+          darkTheme: AppTheme.dark(),
+          themeMode: SettingsService.themeMode,
+          home: WithForegroundTask(
+            child: ValueListenableBuilder<bool>(
+              valueListenable: AppLockService().isLocked,
+              builder: (context, locked, child) {
+                // Lock only covers the UI. Background SMS + queue + FG continue.
+                if (locked) return const LockScreen();
+                return const HomeScreen();
+              },
+            ),
+          ),
+        );
+      },
     );
   }
 }
