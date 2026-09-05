@@ -291,6 +291,10 @@ Service accounts **cannot** upload to personal Drive (no storage quota). Use OAu
 
 You can delete the old `GDRIVE_CREDENTIALS` service-account secret — it is no longer used.
 
+Upload uses a small Python script (`.github/scripts/upload_to_gdrive.py`) with OAuth.
+The marketplace action `logickoder/google-drive-upload@1.0.1` is intentionally not used:
+its published `dist/` still requires service-account `credentials` and runs on deprecated Node 20.
+
 ### 3. Run it
 
 - Push to `main`, or tag `v1.0.1`, or use **Actions → Build APK & Upload to Google Drive → Run workflow**.

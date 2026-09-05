@@ -30,6 +30,7 @@ class PayloadBuilder {
         }
         break;
       case AuthType.basic:
+        // Expect `username:password` in the token field (RFC 7617).
         if (token.isNotEmpty) {
           headers['Authorization'] =
               'Basic ${base64Encode(utf8.encode(token))}';

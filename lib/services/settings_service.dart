@@ -71,7 +71,7 @@ class SettingsService {
       await _box.put('api_token', '');
     }
     if (!_box.containsKey('auth_type')) {
-      await _box.put('auth_type', AuthType.bearer.index);
+      await _box.put('auth_type', AuthType.basic.index);
     }
     if (!_box.containsKey('api_key_header')) {
       await _box.put('api_key_header', 'X-API-Key');
@@ -120,7 +120,7 @@ class SettingsService {
       _box.put('api_token', value.trim());
 
   static AuthType get authType {
-    final index = _box.get('auth_type', defaultValue: AuthType.bearer.index)
+    final index = _box.get('auth_type', defaultValue: AuthType.basic.index)
         as int;
     return AuthType.values[index.clamp(0, AuthType.values.length - 1)];
   }

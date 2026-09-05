@@ -82,15 +82,13 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-      # OAuth is required for personal Drive — service accounts have no storage quota.
+      # Custom OAuth upload — logickoder/google-drive-upload@1.0.1 ships a stale
+      # dist/ that still requires service-account `credentials` and runs on Node 20.
       - name: Upload APK to Google Drive
-        uses: logickoder/google-drive-upload@1.0.1
-        with:
-          authType: oauth
-          clientId: ${{ secrets.GOOGLE_CLIENT_ID }}
-          clientSecret: ${{ secrets.GOOGLE_CLIENT_SECRET }}
-          refreshToken: ${{ secrets.GOOGLE_REFRESH_TOKEN }}
-          filename: ${{ steps.meta.outputs.apk_name }}
-          folderId: ${{ secrets.GDRIVE_FOLDER_ID }}
-          name: ${{ steps.meta.outputs.apk_name }}
-          overwrite: 'true'
+        env:
+          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
+          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+          GOOGLE_REFRESH_TOKEN: ${{ secrets.GOOGLE_REFRESH_TOKEN }}
+          GDRIVE_FOLDER_ID: ${{ secrets.GDRIVE_FOLDER_ID }}
+          APK_NAME: ${{ steps.meta.outputs.apk_name }}
+        run: python3 .github/scripts/upload_to_gdrive.py

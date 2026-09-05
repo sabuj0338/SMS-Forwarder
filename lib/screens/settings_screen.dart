@@ -179,6 +179,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
   }
 
+  String? get _tokenHint {
+    switch (_authType) {
+      case AuthType.none:
+        return null;
+      case AuthType.bearer:
+        return 'Paste the bearer token only';
+      case AuthType.apiKey:
+        return 'Value for the API key header';
+      case AuthType.basic:
+        return 'Example: sms:your-password  (must match API secrets)';
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -205,7 +218,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             controller: _apiUrl,
             decoration: const InputDecoration(
               labelText: 'API URL',
-              hintText: 'https://api.example.com/sms',
+              hintText: 'https://sms-forwarder-api.<subdomain>.workers.dev',
             ),
             keyboardType: TextInputType.url,
             autocorrect: false,
@@ -244,6 +257,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             enabled: _authType != AuthType.none,
             decoration: InputDecoration(
               labelText: _tokenLabel,
+              hintText: _tokenHint,
               suffixIcon: IconButton(
                 icon: Icon(
                   _obscureToken ? Icons.visibility : Icons.visibility_off,
