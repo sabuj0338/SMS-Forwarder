@@ -31,13 +31,16 @@ class ForwardService {
   ForwardService._internal();
 
   static const boxName = 'sms_queue';
+  static const dedupeBoxName = 'sms_dedupe';
 
   Box<QueuedSms> get _box => Hive.box<QueuedSms>(boxName);
+
+  Box get _dedupe => Hive.box(dedupeBoxName);
 
   bool _flushing = false;
   final ValueNotifier<bool> isSyncing = ValueNotifier(false);
 
-  /// O(1) duplicate checks — rebuilt lazily after clears/restarts.
+  /// O(1) duplicate checks against the live queue — rebuilt lazily.
   Set<String>? _hashIndex;
 
   Set<String> get _hashes {
@@ -46,40 +49,60 @@ class ForwardService {
 
   void _invalidateIndex() => _hashIndex = null;
 
-  Future<void> enqueue(QueuedSms sms, {bool triggerFlush = true}) async {
-    if (_hashes.contains(sms.payloadHash)) {
-      developer.log('Duplicate SMS skipped: ${sms.payloadHash}', name: 'forward');
-      return;
+  bool _isDuplicate(QueuedSms sms) {
+    final hash = sms.payloadHash;
+    if (_hashes.contains(hash)) return true;
+    if (_dedupe.containsKey(hash)) return true;
+
+    // Exact sender+body already in queue (covers older hashes / mixed versions).
+    final sender = sms.sender.trim();
+    final body = sms.body.trim();
+    for (final e in _box.values) {
+      if (e.sender.trim() == sender && e.body.trim() == body) return true;
+    }
+    return false;
+  }
+
+  Future<void> _rememberHash(String hash) async {
+    if (_dedupe.containsKey(hash)) return;
+    await _dedupe.put(hash, DateTime.now().toUtc().toIso8601String());
+  }
+
+  /// Returns true when the SMS was newly queued (false if duplicate).
+  Future<bool> enqueue(QueuedSms sms, {bool triggerFlush = true}) async {
+    if (_isDuplicate(sms)) {
+      developer.log(
+        'Duplicate SMS blocked (not queued/sent): ${sms.payloadHash}',
+        name: 'forward',
+      );
+      // Keep durable memory even if only seen via backfill after a clear.
+      await _rememberHash(sms.payloadHash);
+      return false;
     }
 
-    // Near-duplicate: same sender+body already pending/failed recently.
-    final nearDup = _box.values.any(
-      (e) =>
-          e.payloadHash != sms.payloadHash &&
-          e.sender == sms.sender &&
-          e.body == sms.body &&
-          e.receivedAt.difference(sms.receivedAt).abs() <=
-              const Duration(minutes: 2),
-    );
-    if (nearDup) {
-      developer.log('Near-duplicate SMS skipped', name: 'forward');
-      return;
-    }
-
+    // Persist hash first so a crash/backfill race cannot double-send.
+    await _rememberHash(sms.payloadHash);
     await _box.add(sms);
     _hashes.add(sms.payloadHash);
-    // Force durable write before process can be killed.
     await _box.flush();
 
     if (triggerFlush) {
       unawaited(flushPending());
     }
+    return true;
   }
 
   /// Recover crash leftovers + flush — safe from any isolate after Hive ready.
   Future<void> recoverAndFlush({bool forceAll = false}) async {
+    await _seedDedupeFromQueue();
     await recoverStuckSending();
     await flushPending(forceAll: forceAll);
+  }
+
+  Future<void> _seedDedupeFromQueue() async {
+    for (final sms in _box.values) {
+      await _rememberHash(sms.payloadHash);
+    }
   }
 
   /// SMS left as `sending` after kill/crash must be retried.
@@ -135,6 +158,19 @@ class ForwardService {
       for (final sms in pending) {
         // Re-check connectivity between items.
         if (!forceAll && !ConnectivityService().isOnline.value) break;
+        if (_alreadyForwardedDuplicate(sms)) {
+          sms.status = ForwardStatus.sent;
+          sms.lastError = 'Duplicate blocked — not sent';
+          sms.forwardedAt ??= DateTime.now();
+          sms.nextRetryAt = null;
+          await sms.save();
+          await _rememberHash(sms.payloadHash);
+          developer.log(
+            'Blocked duplicate send for ${sms.id}',
+            name: 'forward',
+          );
+          continue;
+        }
         await _sendOne(sms);
       }
       await _box.flush();
@@ -145,6 +181,15 @@ class ForwardService {
   }
 
   Future<bool> retry(QueuedSms sms) async {
+    if (_alreadyForwardedDuplicate(sms)) {
+      sms.status = ForwardStatus.sent;
+      sms.lastError = 'Duplicate blocked — not sent';
+      sms.forwardedAt ??= DateTime.now();
+      sms.nextRetryAt = null;
+      await sms.save();
+      await _rememberHash(sms.payloadHash);
+      return false;
+    }
     sms.status = ForwardStatus.pending;
     sms.lastError = null;
     sms.nextRetryAt = null;
@@ -153,6 +198,30 @@ class ForwardService {
     }
     await sms.save();
     return _sendOne(sms);
+  }
+
+  /// True if another queue item with the same identity was already sent.
+  bool _alreadyForwardedDuplicate(QueuedSms sms) {
+    final sender = sms.sender.trim();
+    final body = sms.body.trim();
+    for (final e in _box.values) {
+      if (identical(e, sms)) continue;
+      if (e.key == sms.key) continue;
+      if (e.status != ForwardStatus.sent) continue;
+      if (e.payloadHash == sms.payloadHash) return true;
+      if (e.sender.trim() == sender && e.body.trim() == body) return true;
+      final txn = sms.txnId?.trim();
+      final otherTxn = e.txnId?.trim();
+      if (txn != null &&
+          txn.isNotEmpty &&
+          otherTxn != null &&
+          otherTxn.isNotEmpty &&
+          e.sender.trim() == sender &&
+          otherTxn == txn) {
+        return true;
+      }
+    }
+    return false;
   }
 
   Future<bool> _sendOne(QueuedSms sms) async {
@@ -193,6 +262,7 @@ class ForwardService {
         sms.lastError = null;
         sms.nextRetryAt = null;
         await sms.save();
+        await _rememberHash(sms.payloadHash);
         developer.log('Forwarded SMS ${sms.id}', name: 'forward');
         return true;
       }

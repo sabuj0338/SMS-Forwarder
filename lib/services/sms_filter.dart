@@ -10,9 +10,7 @@ class MessageFilter {
   }) {
     final allowList = SettingsService.allowedSenders;
     if (allowList.isNotEmpty) {
-      final senderOk = allowList.any(
-        (a) => sender.toLowerCase().contains(a.toLowerCase()),
-      );
+      final senderOk = allowList.any((a) => _senderMatches(sender, a));
       if (!senderOk) {
         developer.log('Sender filtered out: $sender', name: 'filter');
         return false;
@@ -39,6 +37,14 @@ class MessageFilter {
     }
 
     return true;
+  }
+
+  /// Exact match only (trim + case-insensitive). No substring / digit fuzzy match.
+  static bool _senderMatches(String smsSender, String allowed) {
+    final sender = smsSender.trim().toLowerCase();
+    final allow = allowed.trim().toLowerCase();
+    if (sender.isEmpty || allow.isEmpty) return false;
+    return sender == allow;
   }
 
   static bool _matchesRule(String body, String rule, bool useRegex) {

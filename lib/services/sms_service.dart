@@ -53,14 +53,15 @@ class SmsService {
     );
   }
 
-  Future<void> _handleSms(SmsMessage sms, {bool triggerFlush = true}) async {
+  /// Returns true when the SMS was newly queued.
+  Future<bool> _handleSms(SmsMessage sms, {bool triggerFlush = true}) async {
     final queued = _toQueued(sms);
-    if (queued == null) return;
-    await ForwardService().enqueue(queued, triggerFlush: triggerFlush);
+    if (queued == null) return false;
+    return ForwardService().enqueue(queued, triggerFlush: triggerFlush);
   }
 
-  /// Prefer TxnID uniqueness; else sender+body+minute so redeliveries dedupe
-  /// but two real payments a minute apart still enqueue.
+  /// Prefer TxnID uniqueness; otherwise exact sender+body so the same SMS
+  /// is never queued/sent twice (backfill, redelivery, or after clearing the list).
   static String contentHash(
     String sender,
     String body, {
@@ -68,11 +69,13 @@ class SmsService {
     DateTime? receivedAt,
   }) {
     if (txnId != null && txnId.isNotEmpty) {
-      return sha256.convert(utf8.encode('$sender|txn|$txnId')).toString();
+      return sha256
+          .convert(utf8.encode('${sender.trim()}|txn|${txnId.trim()}'))
+          .toString();
     }
-    final minute =
-        (receivedAt ?? DateTime.now()).millisecondsSinceEpoch ~/ 60000;
-    return sha256.convert(utf8.encode('$sender|$body|$minute')).toString();
+    return sha256
+        .convert(utf8.encode('${sender.trim()}|body|${body.trim()}'))
+        .toString();
   }
 
   QueuedSms? _toQueued(SmsMessage sms) {
@@ -112,15 +115,17 @@ class SmsService {
   }
 
   /// Catch SMS received while the process was dead (reboot / force-stop).
-  Future<void> backfillRecentInbox({
+  /// Returns how many new matching messages were queued.
+  Future<int> backfillRecentInbox({
     Duration lookback = const Duration(hours: 72),
-    int maxMessages = 400,
+    int maxMessages = 800,
   }) async {
-    if (isBackfilling.value) return;
+    if (isBackfilling.value) return 0;
     isBackfilling.value = true;
+    var added = 0;
     try {
       final granted = await telephony.requestSmsPermissions;
-      if (granted != true) return;
+      if (granted != true) return 0;
 
       final sinceMs =
           DateTime.now().subtract(lookback).millisecondsSinceEpoch;
@@ -136,13 +141,20 @@ class SmsService {
         if (scanned > maxMessages) break;
         final date = sms.date ?? 0;
         if (date < sinceMs) break;
-        await _handleSms(sms, triggerFlush: false);
+        if (await _handleSms(sms, triggerFlush: false)) {
+          added++;
+        }
       }
 
-      developer.log('Inbox backfill scanned=$scanned', name: 'sms');
+      developer.log(
+        'Inbox backfill scanned=$scanned added=$added',
+        name: 'sms',
+      );
       await ForwardService().recoverAndFlush();
+      return added;
     } catch (e, st) {
       developer.log('Inbox backfill error: $e', name: 'sms', stackTrace: st);
+      return added;
     } finally {
       isBackfilling.value = false;
     }

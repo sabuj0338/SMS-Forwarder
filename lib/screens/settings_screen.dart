@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../models/forward_status.dart';
 import '../services/app_lock_service.dart';
 import '../services/battery_service.dart';
 import '../services/export_service.dart';
@@ -9,7 +10,7 @@ import '../services/forward_service.dart';
 import '../services/payload_builder.dart';
 import '../services/sender_presets.dart';
 import '../services/settings_service.dart';
-import '../models/forward_status.dart';
+import '../widgets/settings_section.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -24,6 +25,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
   late final TextEditingController _apiKeyHeader;
   late final TextEditingController _payloadTemplate;
   late final TextEditingController _fixedHeaders;
+  late final TextEditingController _telegramBotToken;
+  late final TextEditingController _telegramChatId;
   late final TextEditingController _senderInput;
   late final TextEditingController _includeInput;
   late final TextEditingController _excludeInput;
@@ -42,7 +45,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   bool _testing = false;
   bool _obscureToken = true;
+  bool _obscureTelegramToken = true;
   bool _obscurePin = true;
+  bool _showAdvancedApi = false;
 
   @override
   void initState() {
@@ -55,6 +60,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _fixedHeaders = TextEditingController(
       text: SettingsService.customHeaders.join('\n'),
     );
+    _telegramBotToken =
+        TextEditingController(text: SettingsService.telegramBotToken);
+    _telegramChatId =
+        TextEditingController(text: SettingsService.telegramChatId);
     _senderInput = TextEditingController();
     _includeInput = TextEditingController();
     _excludeInput = TextEditingController();
@@ -69,6 +78,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _filtersUseRegex = SettingsService.filtersUseRegex;
     _appLockEnabled = SettingsService.appLockEnabled;
     _structuredParse = SettingsService.structuredParseEnabled;
+    _showAdvancedApi = SettingsService.customHeaders.isNotEmpty ||
+        SettingsService.payloadTemplate.trim() !=
+            SettingsService.defaultPayloadTemplate.trim();
   }
 
   @override
@@ -78,6 +90,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _apiKeyHeader.dispose();
     _payloadTemplate.dispose();
     _fixedHeaders.dispose();
+    _telegramBotToken.dispose();
+    _telegramChatId.dispose();
     _senderInput.dispose();
     _includeInput.dispose();
     _excludeInput.dispose();
@@ -100,6 +114,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
       const SnackBar(content: Text('API settings saved')),
     );
     ForwardService().flushPending();
+  }
+
+  Future<void> _saveTelegram() async {
+    await SettingsService.setTelegramBotToken(_telegramBotToken.text);
+    await SettingsService.setTelegramChatId(_telegramChatId.text);
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Telegram settings saved')),
+    );
   }
 
   Future<void> _testConnection() async {
@@ -188,485 +211,569 @@ class _SettingsScreenState extends State<SettingsScreen> {
       case AuthType.apiKey:
         return 'Value for the API key header';
       case AuthType.basic:
-        return 'Example: sms:your-password  (must match API secrets)';
+        return 'Example: sms:your-password';
     }
   }
 
   @override
   Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+
     return Scaffold(
       appBar: AppBar(title: const Text('Settings')),
       body: ListView(
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.fromLTRB(16, 12, 16, 32),
         children: [
-          _sectionTitle('Forwarding'),
-          SwitchListTile(
-            contentPadding: EdgeInsets.zero,
-            title: const Text('Enable forwarding'),
-            subtitle: const Text('When off, SMS still queues locally'),
-            value: _forwardingEnabled,
-            onChanged: (v) async {
-              setState(() => _forwardingEnabled = v);
-              await SettingsService.setForwardingEnabled(v);
-              if (v) ForwardService().flushPending();
-            },
-          ),
-          const Divider(height: 32),
-          _sectionTitle('API'),
-          const SizedBox(height: 8),
-          TextField(
-            controller: _apiUrl,
-            decoration: const InputDecoration(
-              labelText: 'API URL',
-              hintText: 'https://sms-forwarder-api.<subdomain>.workers.dev',
-            ),
-            keyboardType: TextInputType.url,
-            autocorrect: false,
-            onChanged: (_) => setState(() {}),
-          ),
-          if (_apiUrl.text.trim().startsWith('http://'))
-            Padding(
-              padding: const EdgeInsets.only(top: 6),
-              child: Text(
-                'Warning: prefer HTTPS for production',
-                style: TextStyle(
-                  color: Theme.of(context).colorScheme.error,
-                  fontSize: 12,
-                ),
-              ),
-            ),
-          const SizedBox(height: 12),
-          DropdownButtonFormField<AuthType>(
-            key: ValueKey(_authType),
-            initialValue: _authType,
-            decoration: const InputDecoration(labelText: 'Auth type'),
-            items: AuthType.values
-                .map(
-                  (t) => DropdownMenuItem(value: t, child: Text(t.label)),
-                )
-                .toList(),
-            onChanged: (v) {
-              if (v == null) return;
-              setState(() => _authType = v);
-            },
-          ),
-          const SizedBox(height: 12),
-          TextField(
-            controller: _apiToken,
-            obscureText: _obscureToken,
-            enabled: _authType != AuthType.none,
-            decoration: InputDecoration(
-              labelText: _tokenLabel,
-              hintText: _tokenHint,
-              suffixIcon: IconButton(
-                icon: Icon(
-                  _obscureToken ? Icons.visibility : Icons.visibility_off,
-                ),
-                onPressed: () =>
-                    setState(() => _obscureToken = !_obscureToken),
-              ),
-            ),
-          ),
-          if (_authType == AuthType.apiKey) ...[
-            const SizedBox(height: 12),
-            TextField(
-              controller: _apiKeyHeader,
-              decoration: const InputDecoration(
-                labelText: 'API key header name',
-                hintText: 'X-API-Key',
-              ),
-            ),
-          ],
-          const SizedBox(height: 16),
-          Text(
-            'Fixed headers (every request)',
-            style: Theme.of(context).textTheme.titleSmall,
-          ),
-          const SizedBox(height: 4),
-          Text(
-            'One header per line as Name: Value. Always sent on forward + Test.\n'
-            'Built-in: Content-Type, Accept, X-Device-Id, X-Client.\n'
-            'Placeholder: {{device_id}}  ·  Lines starting with # are ignored.',
-            style: Theme.of(context).textTheme.bodySmall,
-          ),
-          const SizedBox(height: 8),
-          TextField(
-            controller: _fixedHeaders,
-            maxLines: 6,
-            decoration: const InputDecoration(
-              alignLabelWithHint: true,
-              labelText: 'Fixed headers',
-              hintText: 'X-Api-Key: your-secret\nX-Shop-Id: 42\nX-Source: {{device_id}}',
-            ),
-            style: const TextStyle(fontFamily: 'monospace', fontSize: 13),
-          ),
-          const SizedBox(height: 16),
-          Text(
-            'Payload template',
-            style: Theme.of(context).textTheme.titleSmall,
-          ),
-          const SizedBox(height: 4),
-          Text(
-            'Placeholders: {{device_id}} {{sender}} {{body}} {{received_at}} {{amount}} {{txn_id}} {{type}} {{counterparty}} {{currency}}',
-            style: Theme.of(context).textTheme.bodySmall,
-          ),
-          const SizedBox(height: 8),
-          TextField(
-            controller: _payloadTemplate,
-            maxLines: 8,
-            decoration: const InputDecoration(
-              alignLabelWithHint: true,
-              labelText: 'JSON body template',
-            ),
-            style: const TextStyle(fontFamily: 'monospace', fontSize: 13),
-          ),
-          const SizedBox(height: 8),
-          TextButton(
-            onPressed: () {
-              setState(() {
-                _payloadTemplate.text = SettingsService.defaultPayloadTemplate;
-              });
-            },
-            child: const Text('Reset template'),
-          ),
-          const SizedBox(height: 12),
-          Row(
+          SettingsSection(
+            icon: Icons.sync_alt_rounded,
+            title: 'Forwarding',
+            subtitle: 'Queue locally even when paused',
             children: [
-              FilledButton(onPressed: _saveApi, child: const Text('Save API')),
-              const SizedBox(width: 8),
-              OutlinedButton(
-                onPressed: _testing ? null : _testConnection,
-                child: _testing
-                    ? const SizedBox(
-                        width: 16,
-                        height: 16,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                    : const Text('Test'),
+              SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                title: const Text('Enable forwarding'),
+                subtitle: const Text('When off, SMS still queues on device'),
+                value: _forwardingEnabled,
+                onChanged: (v) async {
+                  setState(() => _forwardingEnabled = v);
+                  await SettingsService.setForwardingEnabled(v);
+                  if (v) ForwardService().flushPending();
+                },
               ),
             ],
           ),
-          const SizedBox(height: 8),
-          SelectableText(
-            'Device ID: ${SettingsService.deviceId}',
-            style: Theme.of(context).textTheme.bodySmall,
-          ),
-          const Divider(height: 32),
-          _sectionTitle('Filters'),
-          const SizedBox(height: 4),
-          Text(
-            'Sender allow-list, plus optional include/exclude body rules.',
-            style: Theme.of(context).textTheme.bodySmall,
-          ),
-          SwitchListTile(
-            contentPadding: EdgeInsets.zero,
-            title: const Text('Treat keywords as regex'),
-            subtitle: const Text('Off = plain case-insensitive contains'),
-            value: _filtersUseRegex,
-            onChanged: (v) async {
-              setState(() => _filtersUseRegex = v);
-              await SettingsService.setFiltersUseRegex(v);
-            },
-          ),
-          SwitchListTile(
-            contentPadding: EdgeInsets.zero,
-            title: const Text('Structured parse'),
-            subtitle: const Text(
-              'Extract amount, TxnID, type, counterparty into API payload',
-            ),
-            value: _structuredParse,
-            onChanged: (v) async {
-              setState(() => _structuredParse = v);
-              await SettingsService.setStructuredParseEnabled(v);
-            },
-          ),
-          const SizedBox(height: 8),
-          Text('Quick presets', style: Theme.of(context).textTheme.titleSmall),
-          const SizedBox(height: 8),
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: SenderPresets.items.map((preset) {
-              final already = preset.senders.every(
-                (s) => _senders.any((e) => e.toLowerCase() == s.toLowerCase()),
-              );
-              return FilterChip(
-                label: Text(preset.label),
-                selected: already,
-                onSelected: (_) async {
-                  final next = List<String>.from(_senders);
-                  for (final s in preset.senders) {
-                    if (!next.any((e) => e.toLowerCase() == s.toLowerCase())) {
-                      next.add(s);
-                    }
-                  }
-                  setState(() {
-                    _senders
-                      ..clear()
-                      ..addAll(next);
-                  });
-                  await SettingsService.setAllowedSenders(_senders);
+          const SizedBox(height: 12),
+          SettingsSection(
+            icon: Icons.cloud_outlined,
+            title: 'API',
+            subtitle: 'Where matching SMS are posted',
+            children: [
+              TextField(
+                controller: _apiUrl,
+                decoration: const InputDecoration(
+                  labelText: 'API URL',
+                  hintText: 'https://your-api.example.com/sms',
+                  prefixIcon: Icon(Icons.link),
+                ),
+                keyboardType: TextInputType.url,
+                autocorrect: false,
+                onChanged: (_) => setState(() {}),
+              ),
+              if (_apiUrl.text.trim().startsWith('http://'))
+                Text(
+                  'Prefer HTTPS for production traffic.',
+                  style: TextStyle(color: scheme.error, fontSize: 12),
+                ),
+              DropdownButtonFormField<AuthType>(
+                key: ValueKey(_authType),
+                initialValue: _authType,
+                decoration: const InputDecoration(
+                  labelText: 'Auth type',
+                  prefixIcon: Icon(Icons.lock_outline),
+                ),
+                items: AuthType.values
+                    .map(
+                      (t) => DropdownMenuItem(value: t, child: Text(t.label)),
+                    )
+                    .toList(),
+                onChanged: (v) {
+                  if (v == null) return;
+                  setState(() => _authType = v);
                 },
-              );
-            }).toList(),
-          ),
-          _listEditor(
-            title: 'Allowed senders',
-            hint: 'e.g. bKash or 16216',
-            controller: _senderInput,
-            items: _senders,
-            onAdd: () => _addToList(
-              controller: _senderInput,
-              list: _senders,
-              save: SettingsService.setAllowedSenders,
-            ),
-            onRemove: (s) async {
-              setState(() => _senders.remove(s));
-              await SettingsService.setAllowedSenders(_senders);
-            },
-          ),
-          _listEditor(
-            title: 'Include keywords (optional)',
-            hint: _filtersUseRegex ? r'e.g. TxnID|received' : 'e.g. TxnID',
-            controller: _includeInput,
-            items: _include,
-            help: 'If set, body must match at least one',
-            onAdd: () => _addToList(
-              controller: _includeInput,
-              list: _include,
-              save: SettingsService.setIncludeKeywords,
-            ),
-            onRemove: (s) async {
-              setState(() => _include.remove(s));
-              await SettingsService.setIncludeKeywords(_include);
-            },
-          ),
-          _listEditor(
-            title: 'Exclude keywords (optional)',
-            hint: 'e.g. promotional',
-            controller: _excludeInput,
-            items: _exclude,
-            help: 'Drop message if any rule matches',
-            onAdd: () => _addToList(
-              controller: _excludeInput,
-              list: _exclude,
-              save: SettingsService.setExcludeKeywords,
-            ),
-            onRemove: (s) async {
-              setState(() => _exclude.remove(s));
-              await SettingsService.setExcludeKeywords(_exclude);
-            },
-          ),
-          const Divider(height: 32),
-          _sectionTitle('Data'),
-          const SizedBox(height: 4),
-          Text(
-            'Export the local queue or clear history to free space.',
-            style: Theme.of(context).textTheme.bodySmall,
-          ),
-          ListTile(
-            contentPadding: EdgeInsets.zero,
-            leading: const Icon(Icons.ios_share),
-            title: const Text('Export all messages'),
-            trailing: const Icon(Icons.chevron_right),
-            onTap: () => ExportService.shareLog(),
-          ),
-          ListTile(
-            contentPadding: EdgeInsets.zero,
-            leading: const Icon(Icons.report_gmailerrorred_outlined),
-            title: const Text('Export failed only'),
-            trailing: const Icon(Icons.chevron_right),
-            onTap: () =>
-                ExportService.shareLog(onlyStatus: ForwardStatus.failed),
-          ),
-          ListTile(
-            contentPadding: EdgeInsets.zero,
-            leading: const Icon(Icons.delete_sweep_outlined),
-            title: const Text('Clear sent messages'),
-            onTap: () async {
-              final messenger = ScaffoldMessenger.of(context);
-              final n = await ForwardService().clearSent();
-              messenger.showSnackBar(
-                SnackBar(content: Text('Cleared $n sent messages')),
-              );
-            },
-          ),
-          ListTile(
-            contentPadding: EdgeInsets.zero,
-            leading: const Icon(Icons.delete_forever_outlined),
-            title: const Text('Clear all messages'),
-            onTap: () async {
-              final messenger = ScaffoldMessenger.of(context);
-              final confirmed = await showDialog<bool>(
-                context: context,
-                builder: (dialogContext) => AlertDialog(
-                  title: const Text('Clear all messages?'),
-                  content: const Text(
-                    'This deletes the entire local queue and cannot be undone.',
-                  ),
-                  actions: [
-                    TextButton(
-                      onPressed: () => Navigator.pop(dialogContext, false),
-                      child: const Text('Cancel'),
+              ),
+              TextField(
+                controller: _apiToken,
+                obscureText: _obscureToken,
+                enabled: _authType != AuthType.none,
+                decoration: InputDecoration(
+                  labelText: _tokenLabel,
+                  hintText: _tokenHint,
+                  prefixIcon: const Icon(Icons.vpn_key_outlined),
+                  suffixIcon: IconButton(
+                    icon: Icon(
+                      _obscureToken ? Icons.visibility : Icons.visibility_off,
                     ),
-                    FilledButton(
-                      onPressed: () => Navigator.pop(dialogContext, true),
-                      child: const Text('Clear all'),
+                    onPressed: () =>
+                        setState(() => _obscureToken = !_obscureToken),
+                  ),
+                ),
+              ),
+              if (_authType == AuthType.apiKey)
+                TextField(
+                  controller: _apiKeyHeader,
+                  decoration: const InputDecoration(
+                    labelText: 'API key header name',
+                    hintText: 'X-API-Key',
+                    prefixIcon: Icon(Icons.label_outline),
+                  ),
+                ),
+              Theme(
+                data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+                child: ExpansionTile(
+                  tilePadding: EdgeInsets.zero,
+                  childrenPadding: EdgeInsets.zero,
+                  initiallyExpanded: _showAdvancedApi,
+                  onExpansionChanged: (v) =>
+                      setState(() => _showAdvancedApi = v),
+                  title: Text(
+                    'Advanced payload & headers',
+                    style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                          fontWeight: FontWeight.w600,
+                        ),
+                  ),
+                  subtitle: const Text('Optional JSON template and fixed headers'),
+                  children: [
+                    const SizedBox(height: 8),
+                    Text(
+                      'One header per line as Name: Value. Built-in: Content-Type, Accept, X-Device-Id, X-Client. Placeholder: {{device_id}}',
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                            color: scheme.onSurfaceVariant,
+                          ),
+                    ),
+                    const SizedBox(height: 8),
+                    TextField(
+                      controller: _fixedHeaders,
+                      maxLines: 5,
+                      decoration: const InputDecoration(
+                        alignLabelWithHint: true,
+                        labelText: 'Fixed headers',
+                        hintText:
+                            'X-Api-Key: your-secret\nX-Shop-Id: 42\nX-Source: {{device_id}}',
+                      ),
+                      style: const TextStyle(fontFamily: 'monospace', fontSize: 13),
+                    ),
+                    const SizedBox(height: 12),
+                    Text(
+                      'Placeholders: {{device_id}} {{sender}} {{body}} {{received_at}} {{amount}} {{txn_id}} {{type}} {{counterparty}} {{currency}} {{telegram_bot_token}} {{telegram_chat_id}}',
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                            color: scheme.onSurfaceVariant,
+                          ),
+                    ),
+                    const SizedBox(height: 8),
+                    TextField(
+                      controller: _payloadTemplate,
+                      maxLines: 7,
+                      decoration: const InputDecoration(
+                        alignLabelWithHint: true,
+                        labelText: 'JSON body template',
+                      ),
+                      style: const TextStyle(fontFamily: 'monospace', fontSize: 13),
+                    ),
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: TextButton(
+                        onPressed: () {
+                          setState(() {
+                            _payloadTemplate.text =
+                                SettingsService.defaultPayloadTemplate;
+                          });
+                        },
+                        child: const Text('Reset template'),
+                      ),
                     ),
                   ],
                 ),
-              );
-              if (confirmed == true) {
-                final n = await ForwardService().clearAll();
-                messenger.showSnackBar(
-                  SnackBar(content: Text('Cleared $n messages')),
-                );
-              }
-            },
-          ),
-          const Divider(height: 32),
-          _sectionTitle('App lock'),
-          SwitchListTile(
-            contentPadding: EdgeInsets.zero,
-            title: const Text('Require PIN'),
-            subtitle: Text(
-              SettingsService.hasPin
-                  ? 'Lock on launch and when returning to the app'
-                  : 'Set a PIN below to enable',
-            ),
-            value: _appLockEnabled && SettingsService.hasPin,
-            onChanged: SettingsService.hasPin
-                ? (v) async {
-                    setState(() => _appLockEnabled = v);
-                    await SettingsService.setAppLockEnabled(v);
-                    if (!v) AppLockService().unlockWithoutPin();
-                  }
-                : null,
-          ),
-          const SizedBox(height: 8),
-          TextField(
-            controller: _pinInput,
-            obscureText: _obscurePin,
-            keyboardType: TextInputType.number,
-            inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-            maxLength: 8,
-            decoration: InputDecoration(
-              labelText: SettingsService.hasPin ? 'New PIN' : 'Set PIN',
-              suffixIcon: IconButton(
-                icon: Icon(
-                  _obscurePin ? Icons.visibility : Icons.visibility_off,
-                ),
-                onPressed: () => setState(() => _obscurePin = !_obscurePin),
               ),
-            ),
-          ),
-          TextField(
-            controller: _pinConfirm,
-            obscureText: _obscurePin,
-            keyboardType: TextInputType.number,
-            inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-            maxLength: 8,
-            decoration: const InputDecoration(labelText: 'Confirm PIN'),
-          ),
-          Row(
-            children: [
-              FilledButton(onPressed: _setPin, child: const Text('Save PIN')),
-              const SizedBox(width: 8),
-              if (SettingsService.hasPin)
-                OutlinedButton(
-                  onPressed: () async {
-                    final messenger = ScaffoldMessenger.of(context);
-                    await SettingsService.clearPin();
-                    setState(() => _appLockEnabled = false);
-                    AppLockService().unlockWithoutPin();
-                    messenger.showSnackBar(
-                      const SnackBar(content: Text('App lock removed')),
-                    );
-                  },
-                  child: const Text('Remove lock'),
-                ),
+              Row(
+                children: [
+                  Expanded(
+                    child: FilledButton.icon(
+                      onPressed: _saveApi,
+                      icon: const Icon(Icons.save_outlined),
+                      label: const Text('Save API'),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  OutlinedButton.icon(
+                    onPressed: _testing ? null : _testConnection,
+                    icon: _testing
+                        ? const SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.bolt_outlined),
+                    label: const Text('Test'),
+                  ),
+                ],
+              ),
+              SelectableText(
+                'Device ID: ${SettingsService.deviceId}',
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: scheme.onSurfaceVariant,
+                    ),
+              ),
             ],
           ),
-          const Divider(height: 32),
-          _sectionTitle('Reliability'),
-          const SizedBox(height: 4),
-          Text(
-            'Keep the listener alive on OEM phones that kill background apps.',
-            style: Theme.of(context).textTheme.bodySmall,
-          ),
-          const SizedBox(height: 8),
-          ListTile(
-            contentPadding: EdgeInsets.zero,
-            leading: const Icon(Icons.battery_charging_full),
-            title: const Text('Disable battery optimization'),
-            subtitle: const Text('Required for 24/7 SMS capture'),
-            trailing: const Icon(Icons.chevron_right),
-            onTap: () => BatteryService().requestIgnoreOptimization(),
-          ),
-          ListTile(
-            contentPadding: EdgeInsets.zero,
-            leading: const Icon(Icons.phonelink_setup),
-            title: const Text('Device-specific guide'),
-            subtitle: const Text('Xiaomi, Oppo, Vivo, Samsung, Huawei…'),
-            trailing: const Icon(Icons.chevron_right),
-            onTap: () => BatteryService().showAllGuides(),
-          ),
-              ListTile(
-            contentPadding: EdgeInsets.zero,
-            leading: const Icon(Icons.notifications_active_outlined),
-            title: const Text('Restart listening service'),
-            subtitle: const Text('Shows the persistent notification'),
-            trailing: const Icon(Icons.chevron_right),
-            onTap: () async {
-              final messenger = ScaffoldMessenger.of(context);
-              final ok = await ForegroundService().start();
-              messenger.showSnackBar(
-                SnackBar(
-                  content: Text(
-                    ok
-                        ? 'Listening service running'
-                        : 'Could not start listening service',
+          const SizedBox(height: 12),
+          SettingsSection(
+            icon: Icons.telegram,
+            title: 'Telegram',
+            subtitle: 'Included in every API payload for your backend',
+            iconColor: const Color(0xFF229ED9),
+            children: [
+              TextField(
+                controller: _telegramBotToken,
+                obscureText: _obscureTelegramToken,
+                autocorrect: false,
+                decoration: InputDecoration(
+                  labelText: 'Bot token',
+                  hintText: '123456:ABC-DEF...',
+                  prefixIcon: const Icon(Icons.smart_toy_outlined),
+                  suffixIcon: IconButton(
+                    icon: Icon(
+                      _obscureTelegramToken
+                          ? Icons.visibility
+                          : Icons.visibility_off,
+                    ),
+                    onPressed: () => setState(
+                      () => _obscureTelegramToken = !_obscureTelegramToken,
+                    ),
                   ),
                 ),
-              );
-            },
-          ),
-          const Divider(height: 32),
-          _sectionTitle('Theme'),
-          const SizedBox(height: 8),
-          SegmentedButton<ThemeMode>(
-            segments: const [
-              ButtonSegment(
-                value: ThemeMode.system,
-                label: Text('System'),
-                icon: Icon(Icons.brightness_auto),
               ),
-              ButtonSegment(
-                value: ThemeMode.light,
-                label: Text('Light'),
-                icon: Icon(Icons.light_mode),
+              TextField(
+                controller: _telegramChatId,
+                keyboardType: TextInputType.text,
+                autocorrect: false,
+                decoration: const InputDecoration(
+                  labelText: 'Chat ID',
+                  hintText: '123456789 or -1001234567890',
+                  prefixIcon: Icon(Icons.chat_bubble_outline),
+                ),
               ),
-              ButtonSegment(
-                value: ThemeMode.dark,
-                label: Text('Dark'),
-                icon: Icon(Icons.dark_mode),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: FilledButton.icon(
+                  onPressed: _saveTelegram,
+                  icon: const Icon(Icons.save_outlined),
+                  label: const Text('Save Telegram'),
+                ),
               ),
             ],
-            selected: {_themeMode},
-            onSelectionChanged: (set) async {
-              final mode = set.first;
-              setState(() => _themeMode = mode);
-              await SettingsService.setThemeMode(mode);
-            },
           ),
-          const SizedBox(height: 32),
+          const SizedBox(height: 12),
+          SettingsSection(
+            icon: Icons.filter_alt_outlined,
+            title: 'Filters',
+            subtitle:
+                'Exact sender match (case-insensitive). Optional body rules.',
+            children: [
+              SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                title: const Text('Treat keywords as regex'),
+                subtitle: const Text('Off = plain case-insensitive contains'),
+                value: _filtersUseRegex,
+                onChanged: (v) async {
+                  setState(() => _filtersUseRegex = v);
+                  await SettingsService.setFiltersUseRegex(v);
+                },
+              ),
+              SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                title: const Text('Structured parse'),
+                subtitle: const Text(
+                  'Extract amount, TxnID, type, counterparty',
+                ),
+                value: _structuredParse,
+                onChanged: (v) async {
+                  setState(() => _structuredParse = v);
+                  await SettingsService.setStructuredParseEnabled(v);
+                },
+              ),
+              Text(
+                'Quick presets',
+                style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                      fontWeight: FontWeight.w600,
+                    ),
+              ),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: SenderPresets.items.map((preset) {
+                  final already = preset.senders.every(
+                    (s) =>
+                        _senders.any((e) => e.toLowerCase() == s.toLowerCase()),
+                  );
+                  return FilterChip(
+                    label: Text(preset.label),
+                    selected: already,
+                    onSelected: (_) async {
+                      final next = List<String>.from(_senders);
+                      for (final s in preset.senders) {
+                        if (!next
+                            .any((e) => e.toLowerCase() == s.toLowerCase())) {
+                          next.add(s);
+                        }
+                      }
+                      setState(() {
+                        _senders
+                          ..clear()
+                          ..addAll(next);
+                      });
+                      await SettingsService.setAllowedSenders(_senders);
+                    },
+                  );
+                }).toList(),
+              ),
+              _listEditor(
+                title: 'Allowed senders',
+                hint: 'e.g. bKash or 16216',
+                controller: _senderInput,
+                items: _senders,
+                onAdd: () => _addToList(
+                  controller: _senderInput,
+                  list: _senders,
+                  save: SettingsService.setAllowedSenders,
+                ),
+                onRemove: (s) async {
+                  setState(() => _senders.remove(s));
+                  await SettingsService.setAllowedSenders(_senders);
+                },
+              ),
+              _listEditor(
+                title: 'Include keywords',
+                hint: _filtersUseRegex ? r'e.g. TxnID|received' : 'e.g. TxnID',
+                controller: _includeInput,
+                items: _include,
+                help: 'If set, body must match at least one',
+                onAdd: () => _addToList(
+                  controller: _includeInput,
+                  list: _include,
+                  save: SettingsService.setIncludeKeywords,
+                ),
+                onRemove: (s) async {
+                  setState(() => _include.remove(s));
+                  await SettingsService.setIncludeKeywords(_include);
+                },
+              ),
+              _listEditor(
+                title: 'Exclude keywords',
+                hint: 'e.g. promotional',
+                controller: _excludeInput,
+                items: _exclude,
+                help: 'Drop message if any rule matches',
+                onAdd: () => _addToList(
+                  controller: _excludeInput,
+                  list: _exclude,
+                  save: SettingsService.setExcludeKeywords,
+                ),
+                onRemove: (s) async {
+                  setState(() => _exclude.remove(s));
+                  await SettingsService.setExcludeKeywords(_exclude);
+                },
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          SettingsSection(
+            icon: Icons.folder_outlined,
+            title: 'Data',
+            subtitle: 'Export or clear the local queue',
+            children: [
+              _ActionTile(
+                icon: Icons.ios_share_outlined,
+                title: 'Export all messages',
+                onTap: () => ExportService.shareLog(),
+              ),
+              _ActionTile(
+                icon: Icons.report_gmailerrorred_outlined,
+                title: 'Export failed only',
+                onTap: () =>
+                    ExportService.shareLog(onlyStatus: ForwardStatus.failed),
+              ),
+              _ActionTile(
+                icon: Icons.delete_sweep_outlined,
+                title: 'Clear sent messages',
+                onTap: () async {
+                  final messenger = ScaffoldMessenger.of(context);
+                  final n = await ForwardService().clearSent();
+                  messenger.showSnackBar(
+                    SnackBar(content: Text('Cleared $n sent messages')),
+                  );
+                },
+              ),
+              _ActionTile(
+                icon: Icons.delete_forever_outlined,
+                title: 'Clear all messages',
+                destructive: true,
+                onTap: () async {
+                  final messenger = ScaffoldMessenger.of(context);
+                  final confirmed = await showDialog<bool>(
+                    context: context,
+                    builder: (dialogContext) => AlertDialog(
+                      title: const Text('Clear all messages?'),
+                      content: const Text(
+                        'This deletes the entire local queue and cannot be undone.',
+                      ),
+                      actions: [
+                        TextButton(
+                          onPressed: () => Navigator.pop(dialogContext, false),
+                          child: const Text('Cancel'),
+                        ),
+                        FilledButton(
+                          onPressed: () => Navigator.pop(dialogContext, true),
+                          child: const Text('Clear all'),
+                        ),
+                      ],
+                    ),
+                  );
+                  if (confirmed == true) {
+                    final n = await ForwardService().clearAll();
+                    messenger.showSnackBar(
+                      SnackBar(content: Text('Cleared $n messages')),
+                    );
+                  }
+                },
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          SettingsSection(
+            icon: Icons.lock_outline,
+            title: 'App lock',
+            subtitle: 'Optional PIN when opening the app',
+            children: [
+              SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                title: const Text('Require PIN'),
+                subtitle: Text(
+                  SettingsService.hasPin
+                      ? 'Lock on launch and when returning'
+                      : 'Set a PIN below to enable',
+                ),
+                value: _appLockEnabled && SettingsService.hasPin,
+                onChanged: SettingsService.hasPin
+                    ? (v) async {
+                        setState(() => _appLockEnabled = v);
+                        await SettingsService.setAppLockEnabled(v);
+                        if (!v) AppLockService().unlockWithoutPin();
+                      }
+                    : null,
+              ),
+              TextField(
+                controller: _pinInput,
+                obscureText: _obscurePin,
+                keyboardType: TextInputType.number,
+                inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                maxLength: 8,
+                decoration: InputDecoration(
+                  labelText: SettingsService.hasPin ? 'New PIN' : 'Set PIN',
+                  prefixIcon: const Icon(Icons.pin_outlined),
+                  suffixIcon: IconButton(
+                    icon: Icon(
+                      _obscurePin ? Icons.visibility : Icons.visibility_off,
+                    ),
+                    onPressed: () =>
+                        setState(() => _obscurePin = !_obscurePin),
+                  ),
+                ),
+              ),
+              TextField(
+                controller: _pinConfirm,
+                obscureText: _obscurePin,
+                keyboardType: TextInputType.number,
+                inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                maxLength: 8,
+                decoration: const InputDecoration(
+                  labelText: 'Confirm PIN',
+                  prefixIcon: Icon(Icons.pin_outlined),
+                ),
+              ),
+              Row(
+                children: [
+                  FilledButton(onPressed: _setPin, child: const Text('Save PIN')),
+                  const SizedBox(width: 8),
+                  if (SettingsService.hasPin)
+                    OutlinedButton(
+                      onPressed: () async {
+                        final messenger = ScaffoldMessenger.of(context);
+                        await SettingsService.clearPin();
+                        setState(() => _appLockEnabled = false);
+                        AppLockService().unlockWithoutPin();
+                        messenger.showSnackBar(
+                          const SnackBar(content: Text('App lock removed')),
+                        );
+                      },
+                      child: const Text('Remove lock'),
+                    ),
+                ],
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          SettingsSection(
+            icon: Icons.phonelink_setup_outlined,
+            title: 'Reliability',
+            subtitle: 'Keep listening alive on OEM phones',
+            children: [
+              _ActionTile(
+                icon: Icons.battery_charging_full,
+                title: 'Disable battery optimization',
+                subtitle: 'Required for 24/7 SMS capture',
+                onTap: () => BatteryService().requestIgnoreOptimization(),
+              ),
+              _ActionTile(
+                icon: Icons.phonelink_setup,
+                title: 'Device-specific guide',
+                subtitle: 'Xiaomi, Oppo, Vivo, Samsung, Huawei…',
+                onTap: () => BatteryService().showAllGuides(),
+              ),
+              _ActionTile(
+                icon: Icons.notifications_active_outlined,
+                title: 'Restart listening service',
+                subtitle: 'Shows the persistent notification',
+                onTap: () async {
+                  final messenger = ScaffoldMessenger.of(context);
+                  final ok = await ForegroundService().start();
+                  messenger.showSnackBar(
+                    SnackBar(
+                      content: Text(
+                        ok
+                            ? 'Listening service running'
+                            : 'Could not start listening service',
+                      ),
+                    ),
+                  );
+                },
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          SettingsSection(
+            icon: Icons.palette_outlined,
+            title: 'Theme',
+            children: [
+              SegmentedButton<ThemeMode>(
+                segments: const [
+                  ButtonSegment(
+                    value: ThemeMode.system,
+                    label: Text('System'),
+                    icon: Icon(Icons.brightness_auto),
+                  ),
+                  ButtonSegment(
+                    value: ThemeMode.light,
+                    label: Text('Light'),
+                    icon: Icon(Icons.light_mode),
+                  ),
+                  ButtonSegment(
+                    value: ThemeMode.dark,
+                    label: Text('Dark'),
+                    icon: Icon(Icons.dark_mode),
+                  ),
+                ],
+                selected: {_themeMode},
+                onSelectionChanged: (set) async {
+                  final mode = set.first;
+                  setState(() => _themeMode = mode);
+                  await SettingsService.setThemeMode(mode);
+                },
+              ),
+            ],
+          ),
         ],
       ),
     );
-  }
-
-  Widget _sectionTitle(String text) {
-    return Text(text, style: Theme.of(context).textTheme.titleMedium);
   }
 
   Widget _listEditor({
@@ -678,39 +785,92 @@ class _SettingsScreenState extends State<SettingsScreen> {
     required void Function(String) onRemove,
     String? help,
   }) {
+    final scheme = Theme.of(context).colorScheme;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const SizedBox(height: 12),
-        Text(title, style: Theme.of(context).textTheme.titleSmall),
-        if (help != null)
-          Text(help, style: Theme.of(context).textTheme.bodySmall),
+        Text(
+          title,
+          style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                fontWeight: FontWeight.w600,
+              ),
+        ),
+        if (help != null) ...[
+          const SizedBox(height: 2),
+          Text(
+            help,
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: scheme.onSurfaceVariant,
+                ),
+          ),
+        ],
         const SizedBox(height: 8),
         Row(
           children: [
             Expanded(
               child: TextField(
                 controller: controller,
-                decoration: InputDecoration(labelText: title, hintText: hint),
+                decoration: InputDecoration(hintText: hint, labelText: title),
                 onSubmitted: (_) => onAdd(),
               ),
             ),
             const SizedBox(width: 8),
-            FilledButton(onPressed: onAdd, child: const Text('Add')),
+            FilledButton.tonal(
+              onPressed: onAdd,
+              child: const Text('Add'),
+            ),
           ],
         ),
-        ...items.map(
-          (s) => ListTile(
-            contentPadding: EdgeInsets.zero,
-            dense: true,
-            title: Text(s),
-            trailing: IconButton(
-              icon: const Icon(Icons.delete_outline),
-              onPressed: () => onRemove(s),
-            ),
+        if (items.isNotEmpty) ...[
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: items
+                .map(
+                  (s) => InputChip(
+                    label: Text(s),
+                    onDeleted: () => onRemove(s),
+                    deleteIconColor: scheme.onSurfaceVariant,
+                  ),
+                )
+                .toList(),
           ),
-        ),
+        ],
       ],
+    );
+  }
+}
+
+class _ActionTile extends StatelessWidget {
+  final IconData icon;
+  final String title;
+  final String? subtitle;
+  final VoidCallback onTap;
+  final bool destructive;
+
+  const _ActionTile({
+    required this.icon,
+    required this.title,
+    this.subtitle,
+    required this.onTap,
+    this.destructive = false,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final color = destructive ? scheme.error : scheme.onSurface;
+    return Material(
+      color: scheme.surfaceContainerHighest.withValues(alpha: 0.35),
+      borderRadius: BorderRadius.circular(12),
+      child: ListTile(
+        leading: Icon(icon, color: color),
+        title: Text(title, style: TextStyle(color: color)),
+        subtitle: subtitle == null ? null : Text(subtitle!),
+        trailing: Icon(Icons.chevron_right, color: scheme.outline),
+        onTap: onTap,
+      ),
     );
   }
 }

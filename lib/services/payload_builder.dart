@@ -118,6 +118,8 @@ class PayloadBuilder {
       'type': type ?? parsed?.type ?? '',
       'counterparty': counterparty ?? parsed?.counterparty ?? '',
       'currency': currency ?? parsed?.currency ?? '',
+      'telegram_bot_token': SettingsService.telegramBotToken,
+      'telegram_chat_id': SettingsService.telegramChatId,
     };
 
     try {
@@ -126,6 +128,10 @@ class PayloadBuilder {
       var normalized = _coerceTypes(resolved);
       if (normalized is Map) {
         normalized = _mergeStructured(
+          Map<String, dynamic>.from(normalized),
+          values,
+        );
+        normalized = _mergeTelegram(
           Map<String, dynamic>.from(normalized),
           values,
         );
@@ -151,6 +157,10 @@ class PayloadBuilder {
         if (values['counterparty']!.isNotEmpty)
           'counterparty': values['counterparty'],
         if (values['currency']!.isNotEmpty) 'currency': values['currency'],
+        if (values['telegram_bot_token']!.isNotEmpty)
+          'telegram_bot_token': values['telegram_bot_token'],
+        if (values['telegram_chat_id']!.isNotEmpty)
+          'telegram_chat_id': values['telegram_chat_id'],
         if (test) 'test': true,
       });
     }
@@ -182,6 +192,26 @@ class PayloadBuilder {
     return map;
   }
 
+  /// Always attach Telegram settings when configured (even if template omits them).
+  static Map<String, dynamic> _mergeTelegram(
+    Map<String, dynamic> map,
+    Map<String, String> values,
+  ) {
+    final token = values['telegram_bot_token'] ?? '';
+    final chatId = values['telegram_chat_id'] ?? '';
+    if (token.isNotEmpty) {
+      map['telegram_bot_token'] = token;
+    } else {
+      map.remove('telegram_bot_token');
+    }
+    if (chatId.isNotEmpty) {
+      map['telegram_chat_id'] = chatId;
+    } else {
+      map.remove('telegram_chat_id');
+    }
+    return map;
+  }
+
   static String _numOrEmpty(double? value) {
     if (value == null) return '';
     if (value == value.roundToDouble()) return value.toInt().toString();
@@ -205,6 +235,8 @@ class PayloadBuilder {
         'counterparty',
         'currency',
         'amount',
+        'telegram_bot_token',
+        'telegram_chat_id',
       ]) {
         final v = map[key];
         if (v == null || v == '') map.remove(key);

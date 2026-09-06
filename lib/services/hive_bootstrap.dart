@@ -26,5 +26,8 @@ class HiveBootstrap {
     if (!Hive.isBoxOpen(ForwardService.boxName)) {
       await Hive.openBox<QueuedSms>(ForwardService.boxName);
     }
+    if (!Hive.isBoxOpen(ForwardService.dedupeBoxName)) {
+      await Hive.openBox(ForwardService.dedupeBoxName);
+    }
   }
 }

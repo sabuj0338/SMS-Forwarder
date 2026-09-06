@@ -41,7 +41,9 @@ class SettingsService {
   "txn_id": "{{txn_id}}",
   "type": "{{type}}",
   "counterparty": "{{counterparty}}",
-  "currency": "{{currency}}"
+  "currency": "{{currency}}",
+  "telegram_bot_token": "{{telegram_bot_token}}",
+  "telegram_chat_id": "{{telegram_chat_id}}"
 }''';
 
   static Box get _box => Hive.box(boxName);
@@ -102,6 +104,12 @@ class SettingsService {
     }
     if (!_box.containsKey('structured_parse_enabled')) {
       await _box.put('structured_parse_enabled', true);
+    }
+    if (!_box.containsKey('telegram_bot_token')) {
+      await _box.put('telegram_bot_token', '');
+    }
+    if (!_box.containsKey('telegram_chat_id')) {
+      await _box.put('telegram_chat_id', '');
     }
   }
 
@@ -226,6 +234,18 @@ class SettingsService {
 
   static Future<void> setStructuredParseEnabled(bool value) =>
       _box.put('structured_parse_enabled', value);
+
+  static String get telegramBotToken =>
+      _box.get('telegram_bot_token', defaultValue: '') as String;
+
+  static Future<void> setTelegramBotToken(String value) =>
+      _box.put('telegram_bot_token', value.trim());
+
+  static String get telegramChatId =>
+      _box.get('telegram_chat_id', defaultValue: '') as String;
+
+  static Future<void> setTelegramChatId(String value) =>
+      _box.put('telegram_chat_id', value.trim());
 
   static List<String> _stringList(String key) {
     final raw = _box.get(key, defaultValue: <String>[]);
