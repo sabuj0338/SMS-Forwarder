@@ -117,8 +117,8 @@ class SmsService {
   /// Catch SMS received while the process was dead (reboot / force-stop).
   /// Returns how many new matching messages were queued.
   Future<int> backfillRecentInbox({
-    Duration lookback = const Duration(hours: 72),
-    int maxMessages = 800,
+    Duration? lookback,
+    int? maxMessages,
   }) async {
     if (isBackfilling.value) return 0;
     isBackfilling.value = true;
@@ -127,8 +127,12 @@ class SmsService {
       final granted = await telephony.requestSmsPermissions;
       if (granted != true) return 0;
 
+      final window = lookback ?? SettingsService.inboxLookbackDuration;
+      // Longer windows need a higher scan cap or busy inboxes stop early.
+      final hours = window.inHours.clamp(1, 336);
+      final scanLimit = maxMessages ?? (hours * 25).clamp(800, 5000);
       final sinceMs =
-          DateTime.now().subtract(lookback).millisecondsSinceEpoch;
+          DateTime.now().subtract(window).millisecondsSinceEpoch;
 
       final messages = await telephony.getInboxSms(
         columns: [SmsColumn.ADDRESS, SmsColumn.BODY, SmsColumn.DATE],
@@ -138,7 +142,7 @@ class SmsService {
       var scanned = 0;
       for (final sms in messages) {
         scanned++;
-        if (scanned > maxMessages) break;
+        if (scanned > scanLimit) break;
         final date = sms.date ?? 0;
         if (date < sinceMs) break;
         if (await _handleSms(sms, triggerFlush: false)) {
@@ -147,7 +151,8 @@ class SmsService {
       }
 
       developer.log(
-        'Inbox backfill scanned=$scanned added=$added',
+        'Inbox backfill lookback=${window.inHours}h scanned=$scanned '
+        'limit=$scanLimit added=$added',
         name: 'sms',
       );
       await ForwardService().recoverAndFlush();

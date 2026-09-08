@@ -63,7 +63,7 @@ Reliable SMS → API forwarder for phones that receive bKash, Nagad, bank, and s
 - [x] Manual retry on failed / pending items
 - [x] Duplicate guard (TxnID hash, or sender + body + minute)
 - [x] Stuck `sending` recovery after crash / kill
-- [x] Inbox backfill (last 72h) after start / resume / reboot / alarm / pull-to-refresh
+- [x] Inbox backfill (configurable lookback, default 72h) after start / resume / reboot / alarm / pull-to-refresh
 - [x] Battery optimization + OEM auto-start guides
 - [x] High-priority SMS broadcast receiver
 
@@ -102,7 +102,7 @@ SMS is **queued first**, then forwarded. UI state never blocks capture.
 | **Offline** | Stored in Hive immediately; sync when network returns |
 | **App exit / swipe away** | SMS receiver still captures; default AlarmManager retries sync; optional FGS for faster retries |
 | **App lock (PIN)** | UI-only; listening + queue + forward continue |
-| **Device reboot** | Alarm (and optional FGS) reschedule; inbox backfill (72h) recovers misses |
+| **Device reboot** | Alarm (and optional FGS) reschedule; inbox backfill (configurable, default 72h) recovers misses |
 | **Crash mid-send** | `sending` → `pending` on next start / sync tick |
 | **OEM force-stop** | Cannot intercept — use battery + auto-start exemptions |
 
@@ -133,7 +133,7 @@ AppSettings
   payloadTemplate
   allowedSenders, includeKeywords, excludeKeywords, filtersUseRegex
   structuredParseEnabled, forwardingEnabled
-  realtimeKeepAliveEnabled, syncIntervalMinutes
+  realtimeKeepAliveEnabled, syncIntervalMinutes, inboxLookbackHours
   themeMode, deviceId, appLock PIN (hashed)
 ```
 

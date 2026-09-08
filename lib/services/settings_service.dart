@@ -118,6 +118,9 @@ class SettingsService {
     if (!_box.containsKey('sync_interval_minutes')) {
       await _box.put('sync_interval_minutes', 5);
     }
+    if (!_box.containsKey('inbox_lookback_hours')) {
+      await _box.put('inbox_lookback_hours', 72);
+    }
   }
 
   static String get deviceId =>
@@ -263,9 +266,10 @@ class SettingsService {
 
   /// AlarmManager period when realtime keepalive is off (minutes).
   static int get syncIntervalMinutes {
-    final raw = _box.get('sync_interval_minutes', defaultValue: 5) as int;
+    final raw = _box.get('sync_interval_minutes', defaultValue: 5);
+    final minutes = raw is int ? raw : int.tryParse(raw.toString()) ?? 5;
     const allowed = [5, 15, 30, 60];
-    if (allowed.contains(raw)) return raw;
+    if (allowed.contains(minutes)) return minutes;
     return 5;
   }
 
@@ -274,6 +278,25 @@ class SettingsService {
     final minutes = allowed.contains(value) ? value : 5;
     return _box.put('sync_interval_minutes', minutes);
   }
+
+  /// How far back inbox backfill scans for missed SMS (hours). Default 72.
+  static const allowedLookbackHours = [24, 48, 72, 168, 336];
+
+  static int get inboxLookbackHours {
+    final raw = _box.get('inbox_lookback_hours', defaultValue: 72);
+    final hours = raw is int ? raw : int.tryParse(raw.toString()) ?? 72;
+    if (allowedLookbackHours.contains(hours)) return hours;
+    return 72;
+  }
+
+  static Future<void> setInboxLookbackHours(int value) {
+    final hours =
+        allowedLookbackHours.contains(value) ? value : 72;
+    return _box.put('inbox_lookback_hours', hours);
+  }
+
+  static Duration get inboxLookbackDuration =>
+      Duration(hours: inboxLookbackHours);
 
   static List<String> _stringList(String key) {
     final raw = _box.get(key, defaultValue: <String>[]);

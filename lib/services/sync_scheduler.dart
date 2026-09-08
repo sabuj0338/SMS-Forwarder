@@ -56,10 +56,12 @@ class SyncScheduler {
     );
   }
 
-  /// Schedules the next sync tick.
+  /// Schedules the next sync tick via one-shot + self-reschedule in [alarmSyncCallback].
   ///
-  /// Uses exact one-shot + self-reschedule so intervals like 5 minutes actually
-  /// fire (inexact [periodic] is typically batched to ≥15 minutes on Android).
+  /// Uses inexact + allowWhileIdle (not exact): the plugin still returns `true`
+  /// when exact alarms are denied on Android 12+, which would silently schedule
+  /// nothing. Inexact one-shots always register; under Doze they may stretch
+  /// toward ~9+ minutes.
   static Future<void> scheduleAlarm() async {
     if (!Platform.isAndroid) return;
 
@@ -67,35 +69,18 @@ class SyncScheduler {
     final minutes = SettingsService.syncIntervalMinutes;
     await AndroidAlarmManager.cancel(alarmId);
 
-    var ok = await AndroidAlarmManager.oneShot(
+    final ok = await AndroidAlarmManager.oneShot(
       Duration(minutes: minutes),
       alarmId,
       alarmSyncCallback,
-      exact: true,
+      exact: false,
       wakeup: true,
       allowWhileIdle: true,
       rescheduleOnReboot: true,
     );
 
-    if (!ok) {
-      // Exact alarm may be blocked (Android 14+). Fall back to inexact repeating.
-      developer.log(
-        'Exact one-shot failed — falling back to inexact periodic',
-        name: 'sync',
-      );
-      ok = await AndroidAlarmManager.periodic(
-        Duration(minutes: minutes),
-        alarmId,
-        alarmSyncCallback,
-        exact: false,
-        wakeup: true,
-        allowWhileIdle: false,
-        rescheduleOnReboot: true,
-      );
-    }
-
     developer.log(
-      'Alarm scheduled every ${minutes}m ok=$ok',
+      'Alarm one-shot in ${minutes}m ok=$ok',
       name: 'sync',
     );
   }
@@ -127,7 +112,7 @@ Future<void> alarmSyncCallback() async {
     await HiveBootstrap.ensureReady();
     await SettingsService.init();
     if (SettingsService.realtimeKeepAliveEnabled) {
-      // FGS mode owns sync; ignore stray alarms.
+      // FGS mode owns sync; do not chain another alarm.
       return;
     }
     await ConnectivityService().refresh();

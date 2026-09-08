@@ -45,6 +45,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   late bool _structuredParse;
   late bool _realtimeKeepAlive;
   late int _syncIntervalMinutes;
+  late int _inboxLookbackHours;
 
   bool _testing = false;
   bool _obscureToken = true;
@@ -83,6 +84,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _structuredParse = SettingsService.structuredParseEnabled;
     _realtimeKeepAlive = SettingsService.realtimeKeepAliveEnabled;
     _syncIntervalMinutes = SettingsService.syncIntervalMinutes;
+    _inboxLookbackHours = SettingsService.inboxLookbackHours;
     _showAdvancedApi = SettingsService.customHeaders.isNotEmpty ||
         SettingsService.payloadTemplate.trim() !=
             SettingsService.defaultPayloadTemplate.trim();
@@ -128,6 +130,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(content: Text('Telegram settings saved')),
     );
+  }
+
+  static String _lookbackLabel(int hours) {
+    if (hours % 24 == 0) {
+      final days = hours ~/ 24;
+      return '$hours hours ($days day${days == 1 ? '' : 's'})';
+    }
+    return '$hours hours';
   }
 
   Future<void> _testConnection() async {
@@ -762,6 +772,30 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   },
                 ),
               ],
+              const SizedBox(height: 4),
+              DropdownButtonFormField<int>(
+                key: ValueKey(_inboxLookbackHours),
+                initialValue: _inboxLookbackHours,
+                decoration: const InputDecoration(
+                  labelText: 'Inbox scan window',
+                  helperText:
+                      'How far back to re-read SMS on sync / open / alarm',
+                  prefixIcon: Icon(Icons.history),
+                ),
+                items: SettingsService.allowedLookbackHours
+                    .map(
+                      (h) => DropdownMenuItem(
+                        value: h,
+                        child: Text(_lookbackLabel(h)),
+                      ),
+                    )
+                    .toList(),
+                onChanged: (v) async {
+                  if (v == null) return;
+                  setState(() => _inboxLookbackHours = v);
+                  await SettingsService.setInboxLookbackHours(v);
+                },
+              ),
               _ActionTile(
                 icon: Icons.battery_charging_full,
                 title: 'Disable battery optimization',
