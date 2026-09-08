@@ -13,6 +13,7 @@ import 'services/forward_service.dart';
 import 'services/hive_bootstrap.dart';
 import 'services/settings_service.dart';
 import 'services/sms_service.dart';
+import 'services/sync_scheduler.dart';
 import 'theme/app_theme.dart';
 
 Future<void> main() async {
@@ -30,6 +31,7 @@ Future<void> main() async {
   await SmsService().init();
   await fg.init();
   fg.bindCallbacks();
+  await SyncScheduler.init();
 
   unawaited(ForwardService().recoverAndFlush());
   unawaited(BatteryService().refresh());
@@ -51,8 +53,7 @@ class _SmsForwarderAppState extends State<SmsForwarderApp>
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     WidgetsBinding.instance.addPostFrameCallback((_) async {
-      final fg = ForegroundService();
-      await fg.start();
+      await SyncScheduler.applyFromSettings();
       await BatteryService().refresh();
       // Second-chance backfill after UI is up (permissions dialogs settled).
       unawaited(SmsService().backfillRecentInbox());
@@ -68,7 +69,7 @@ class _SmsForwarderAppState extends State<SmsForwarderApp>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    // App lock is UI-only — SMS receiver + FG service keep running.
+    // App lock is UI-only — SMS receiver + sync keep running.
     if (state == AppLifecycleState.paused) {
       AppLockService().lockIfEnabled();
       // Persist any in-flight Hive writes before process may be frozen.
@@ -82,11 +83,8 @@ class _SmsForwarderAppState extends State<SmsForwarderApp>
   Future<void> _onResume() async {
     await BatteryService().refresh();
     await ConnectivityService().refresh();
-    final fg = ForegroundService();
-    await fg.refreshRunningState();
-    if (!fg.isRunning.value) {
-      await fg.start();
-    }
+    // Re-apply FGS vs AlarmManager so a lost alarm / stale FGS is corrected.
+    await SyncScheduler.applyFromSettings();
     await ForwardService().recoverStuckSending();
     unawaited(SmsService().backfillRecentInbox());
     unawaited(ForwardService().recoverAndFlush());
@@ -107,7 +105,7 @@ class _SmsForwarderAppState extends State<SmsForwarderApp>
             child: ValueListenableBuilder<bool>(
               valueListenable: AppLockService().isLocked,
               builder: (context, locked, child) {
-                // Lock only covers the UI. Background SMS + queue + FG continue.
+                // Lock only covers the UI. Background SMS + queue continue.
                 if (locked) return const LockScreen();
                 return const HomeScreen();
               },

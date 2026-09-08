@@ -10,6 +10,7 @@ import '../services/foreground_service.dart';
 import '../services/forward_service.dart';
 import '../services/settings_service.dart';
 import '../services/sms_service.dart';
+import '../services/sync_scheduler.dart';
 import '../widgets/message_tile.dart';
 import 'message_detail_screen.dart';
 import 'settings_screen.dart';
@@ -50,8 +51,7 @@ class HomeScreen extends StatelessWidget {
           IconButton.filledTonal(
             tooltip: 'Sync now',
             onPressed: () async {
-              await forward.flushPending();
-              await fg.updateNotificationFromCounts();
+              await SyncScheduler.runManualSync();
             },
             icon: const Icon(Icons.cloud_upload_outlined),
           ),
@@ -211,15 +211,15 @@ class HomeScreen extends StatelessWidget {
                   ..sort((a, b) => b.receivedAt.compareTo(a.receivedAt));
 
                 Future<void> onRefresh() async {
-                  final added = await smsService.backfillRecentInbox();
-                  await fg.updateNotificationFromCounts();
+                  final result = await SyncScheduler.runManualSync();
                   if (!context.mounted) return;
+                  final added = result.addedFromInbox;
                   ScaffoldMessenger.of(context).showSnackBar(
                     SnackBar(
                       content: Text(
                         added > 0
-                            ? 'Found $added new matching message${added == 1 ? '' : 's'}'
-                            : 'Inbox re-scanned — no new matching messages',
+                            ? 'Synced — found $added new matching message${added == 1 ? '' : 's'}'
+                            : 'Synced — inbox re-scanned, queue flushed',
                       ),
                     ),
                   );
@@ -263,7 +263,7 @@ class HomeScreen extends StatelessWidget {
                                   ),
                                   const SizedBox(height: 8),
                                   Text(
-                                    'Matching SMS will show up here.\nPull down to re-scan allowed senders.',
+                                    'Matching SMS will show up here.\nPull down to sync inbox + flush queue.',
                                     textAlign: TextAlign.center,
                                     style: Theme.of(context)
                                         .textTheme
@@ -454,13 +454,27 @@ class _StatusBar extends StatelessWidget {
                           ),
                           ValueListenableBuilder<bool>(
                             valueListenable: foreground.isRunning,
-                            builder: (context, running, child) => _StatusChip(
-                              icon: running
-                                  ? Icons.notifications_active_outlined
-                                  : Icons.notifications_off_outlined,
-                              label: running ? 'Service on' : 'Service off',
-                              ok: running,
-                            ),
+                            builder: (context, running, child) {
+                              final keepAlive =
+                                  SettingsService.realtimeKeepAliveEnabled;
+                              if (keepAlive) {
+                                return _StatusChip(
+                                  icon: running
+                                      ? Icons.notifications_active_outlined
+                                      : Icons.notifications_none_outlined,
+                                  label: running
+                                      ? 'Realtime on'
+                                      : 'Realtime off',
+                                  ok: running,
+                                );
+                              }
+                              return _StatusChip(
+                                icon: Icons.schedule_outlined,
+                                label:
+                                    'Sync every ${SettingsService.syncIntervalMinutes}m',
+                                ok: true,
+                              );
+                            },
                           ),
                           ValueListenableBuilder<bool>(
                             valueListenable: connectivity.isOnline,

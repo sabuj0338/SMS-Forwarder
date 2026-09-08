@@ -25,6 +25,7 @@ dependencies:
   disable_battery_optimization: ^1.1.2
   share_plus: ^10.1.4
   path: ^1.9.1
+  android_alarm_manager_plus: ^5.1.1
 
 dev_dependencies:
   flutter_test:

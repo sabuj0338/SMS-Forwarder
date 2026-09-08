@@ -30,7 +30,7 @@ class ForwardTaskHandler extends TaskHandler {
       await ForwardService().recoverAndFlush();
       final counts = ForwardService().counts();
       await FlutterForegroundTask.updateService(
-        notificationTitle: 'SMS Forwarder listening',
+        notificationTitle: 'SMS Forwarder keepalive',
         notificationText:
             'Pending ${counts['pending']} · Failed ${counts['failed']} · Tap to open',
       );
@@ -46,6 +46,15 @@ class ForwardTaskHandler extends TaskHandler {
   @override
   Future<void> onStart(DateTime timestamp, TaskStarter starter) async {
     developer.log('Foreground task started (${starter.name})', name: 'fg');
+    await HiveBootstrap.ensureReady();
+    await SettingsService.init();
+    // Boot / package-replace can auto-start FGS; stop if user opted out.
+    // autoRunOnBoot is tied to the toggle; this covers stale plugin prefs.
+    if (!SettingsService.realtimeKeepAliveEnabled) {
+      developer.log('FGS disabled in settings — stopping', name: 'fg');
+      await FlutterForegroundTask.stopService();
+      return;
+    }
     await _tick();
   }
 
@@ -108,15 +117,17 @@ class ForegroundService {
     }
   }
 
-  Future<void> init() async {
+  Future<void> init({bool? autoRunOnBoot}) async {
     if (!Platform.isAndroid) return;
+
+    final boot = autoRunOnBoot ?? SettingsService.realtimeKeepAliveEnabled;
 
     FlutterForegroundTask.init(
       androidNotificationOptions: AndroidNotificationOptions(
         channelId: 'sms_forwarder_listening',
         channelName: 'SMS Forwarder',
         channelDescription:
-            'Shows while SMS Forwarder is listening in the background.',
+            'Shows while realtime keepalive is enabled.',
         channelImportance: NotificationChannelImportance.LOW,
         priority: NotificationPriority.LOW,
         onlyAlertOnce: true,
@@ -128,8 +139,8 @@ class ForegroundService {
       foregroundTaskOptions: ForegroundTaskOptions(
         // Faster sync loop while keeping battery reasonable.
         eventAction: ForegroundTaskEventAction.repeat(15000),
-        autoRunOnBoot: true,
-        autoRunOnMyPackageReplaced: true,
+        autoRunOnBoot: boot,
+        autoRunOnMyPackageReplaced: boot,
         allowWakeLock: true,
         allowWifiLock: true,
       ),
@@ -146,7 +157,7 @@ class ForegroundService {
     }
   }
 
-  Future<bool> start() async {
+  Future<bool> start({bool restartIfRunning = false}) async {
     if (!Platform.isAndroid) return false;
     await ensurePermissions();
 
@@ -154,13 +165,19 @@ class ForegroundService {
     final text =
         'Pending ${counts['pending']} · Failed ${counts['failed']} · Tap to open';
 
+    final alreadyRunning = await FlutterForegroundTask.isRunningService;
+    if (alreadyRunning && !restartIfRunning) {
+      isRunning.value = true;
+      return true;
+    }
+
     final ServiceRequestResult result;
-    if (await FlutterForegroundTask.isRunningService) {
+    if (alreadyRunning) {
       result = await FlutterForegroundTask.restartService();
     } else {
       result = await FlutterForegroundTask.startService(
         serviceId: 256,
-        notificationTitle: 'SMS Forwarder listening',
+        notificationTitle: 'SMS Forwarder keepalive',
         notificationText: text,
         notificationButtons: [
           const NotificationButton(id: 'sync', text: 'Sync'),
@@ -193,7 +210,7 @@ class ForegroundService {
     if (!await FlutterForegroundTask.isRunningService) return;
     final counts = ForwardService().counts();
     await FlutterForegroundTask.updateService(
-      notificationTitle: 'SMS Forwarder listening',
+      notificationTitle: 'SMS Forwarder keepalive',
       notificationText:
           'Pending ${counts['pending']} · Failed ${counts['failed']} · Tap to open',
     );

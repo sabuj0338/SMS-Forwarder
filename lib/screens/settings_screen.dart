@@ -10,6 +10,7 @@ import '../services/forward_service.dart';
 import '../services/payload_builder.dart';
 import '../services/sender_presets.dart';
 import '../services/settings_service.dart';
+import '../services/sync_scheduler.dart';
 import '../widgets/settings_section.dart';
 
 class SettingsScreen extends StatefulWidget {
@@ -42,6 +43,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
   late bool _filtersUseRegex;
   late bool _appLockEnabled;
   late bool _structuredParse;
+  late bool _realtimeKeepAlive;
+  late int _syncIntervalMinutes;
 
   bool _testing = false;
   bool _obscureToken = true;
@@ -78,6 +81,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _filtersUseRegex = SettingsService.filtersUseRegex;
     _appLockEnabled = SettingsService.appLockEnabled;
     _structuredParse = SettingsService.structuredParseEnabled;
+    _realtimeKeepAlive = SettingsService.realtimeKeepAliveEnabled;
+    _syncIntervalMinutes = SettingsService.syncIntervalMinutes;
     _showAdvancedApi = SettingsService.customHeaders.isNotEmpty ||
         SettingsService.payloadTemplate.trim() !=
             SettingsService.defaultPayloadTemplate.trim();
@@ -705,8 +710,58 @@ class _SettingsScreenState extends State<SettingsScreen> {
           SettingsSection(
             icon: Icons.phonelink_setup_outlined,
             title: 'Reliability',
-            subtitle: 'Keep listening alive on OEM phones',
+            subtitle: 'Background sync + OEM survival',
             children: [
+              SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                title: const Text('Realtime keepalive'),
+                subtitle: Text(
+                  _realtimeKeepAlive
+                      ? 'Foreground service — sticky notification, ~15s retries'
+                      : 'Off — AlarmManager sync, no sticky notification',
+                ),
+                value: _realtimeKeepAlive,
+                onChanged: (v) async {
+                  final messenger = ScaffoldMessenger.of(context);
+                  setState(() => _realtimeKeepAlive = v);
+                  await SettingsService.setRealtimeKeepAliveEnabled(v);
+                  await SyncScheduler.applyFromSettings();
+                  await ForegroundService().refreshRunningState();
+                  if (!mounted) return;
+                  final running = ForegroundService().isRunning.value;
+                  final message = !v
+                      ? 'Realtime off — syncing every $_syncIntervalMinutes min'
+                      : running
+                          ? 'Realtime keepalive on — notification may appear'
+                          : 'Could not start keepalive — using AlarmManager sync';
+                  messenger.showSnackBar(SnackBar(content: Text(message)));
+                },
+              ),
+              if (!_realtimeKeepAlive) ...[
+                const SizedBox(height: 4),
+                DropdownButtonFormField<int>(
+                  key: ValueKey(_syncIntervalMinutes),
+                  initialValue: _syncIntervalMinutes,
+                  decoration: const InputDecoration(
+                    labelText: 'Background sync interval',
+                    prefixIcon: Icon(Icons.timer_outlined),
+                  ),
+                  items: SyncScheduler.allowedIntervals
+                      .map(
+                        (m) => DropdownMenuItem(
+                          value: m,
+                          child: Text('Every $m minutes'),
+                        ),
+                      )
+                      .toList(),
+                  onChanged: (v) async {
+                    if (v == null) return;
+                    setState(() => _syncIntervalMinutes = v);
+                    await SettingsService.setSyncIntervalMinutes(v);
+                    await SyncScheduler.scheduleAlarm();
+                  },
+                ),
+              ],
               _ActionTile(
                 icon: Icons.battery_charging_full,
                 title: 'Disable battery optimization',
@@ -719,24 +774,28 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 subtitle: 'Xiaomi, Oppo, Vivo, Samsung, Huawei…',
                 onTap: () => BatteryService().showAllGuides(),
               ),
-              _ActionTile(
-                icon: Icons.notifications_active_outlined,
-                title: 'Restart listening service',
-                subtitle: 'Shows the persistent notification',
-                onTap: () async {
-                  final messenger = ScaffoldMessenger.of(context);
-                  final ok = await ForegroundService().start();
-                  messenger.showSnackBar(
-                    SnackBar(
-                      content: Text(
-                        ok
-                            ? 'Listening service running'
-                            : 'Could not start listening service',
+              if (_realtimeKeepAlive)
+                _ActionTile(
+                  icon: Icons.notifications_active_outlined,
+                  title: 'Restart keepalive service',
+                  subtitle: 'Shows the persistent notification',
+                  onTap: () async {
+                    final messenger = ScaffoldMessenger.of(context);
+                    await SyncScheduler.cancelAlarm();
+                    final ok = await ForegroundService().start(
+                      restartIfRunning: true,
+                    );
+                    messenger.showSnackBar(
+                      SnackBar(
+                        content: Text(
+                          ok
+                              ? 'Keepalive service running'
+                              : 'Could not start keepalive service',
+                        ),
                       ),
-                    ),
-                  );
-                },
-              ),
+                    );
+                  },
+                ),
             ],
           ),
           const SizedBox(height: 12),

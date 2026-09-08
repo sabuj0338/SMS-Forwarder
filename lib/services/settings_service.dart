@@ -111,6 +111,13 @@ class SettingsService {
     if (!_box.containsKey('telegram_chat_id')) {
       await _box.put('telegram_chat_id', '');
     }
+    if (!_box.containsKey('realtime_keepalive_enabled')) {
+      // Opt-in: default is AlarmManager sync (no sticky notification).
+      await _box.put('realtime_keepalive_enabled', false);
+    }
+    if (!_box.containsKey('sync_interval_minutes')) {
+      await _box.put('sync_interval_minutes', 5);
+    }
   }
 
   static String get deviceId =>
@@ -246,6 +253,27 @@ class SettingsService {
 
   static Future<void> setTelegramChatId(String value) =>
       _box.put('telegram_chat_id', value.trim());
+
+  /// Opt-in foreground service for faster retries + sticky notification.
+  static bool get realtimeKeepAliveEnabled =>
+      _box.get('realtime_keepalive_enabled', defaultValue: false) as bool;
+
+  static Future<void> setRealtimeKeepAliveEnabled(bool value) =>
+      _box.put('realtime_keepalive_enabled', value);
+
+  /// AlarmManager period when realtime keepalive is off (minutes).
+  static int get syncIntervalMinutes {
+    final raw = _box.get('sync_interval_minutes', defaultValue: 5) as int;
+    const allowed = [5, 15, 30, 60];
+    if (allowed.contains(raw)) return raw;
+    return 5;
+  }
+
+  static Future<void> setSyncIntervalMinutes(int value) {
+    const allowed = [5, 15, 30, 60];
+    final minutes = allowed.contains(value) ? value : 5;
+    return _box.put('sync_interval_minutes', minutes);
+  }
 
   static List<String> _stringList(String key) {
     final raw = _box.get(key, defaultValue: <String>[]);

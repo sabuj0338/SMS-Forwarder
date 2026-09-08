@@ -26,7 +26,7 @@ Reliable SMS → API forwarder for phones that receive bKash, Nagad, bank, and s
 ┌──────────────────────────┐
 │  SMS Forwarder APK       │  ← this repo (sideloaded)
 │  RECEIVE_SMS + READ_SMS  │
-│  Foreground service      │
+│  AlarmManager sync       │  ← default (optional FGS keepalive)
 │  Local Hive queue        │
 └────────────┬─────────────┘
              │ HTTPS POST (when online)
@@ -55,14 +55,15 @@ Reliable SMS → API forwarder for phones that receive bKash, Nagad, bank, and s
 - [x] Minimal Home, Settings, message detail UI
 
 ### Reliability
-- [x] Foreground service + persistent “listening” notification
-- [x] FG isolate flushes queue every 15s (works even if UI is dead)
+- [x] Optional realtime keepalive (foreground service + sticky notification)
+- [x] Default AlarmManager background sync (no sticky notification; interval 5–60m)
+- [x] FG isolate flushes queue every 15s when realtime mode is on
 - [x] Retry with exponential backoff (transient network / 5xx do not burn budget the same way)
 - [x] Delivery status: `pending` → `sending` → `sent` / `failed`
 - [x] Manual retry on failed / pending items
 - [x] Duplicate guard (TxnID hash, or sender + body + minute)
 - [x] Stuck `sending` recovery after crash / kill
-- [x] Inbox backfill (last 72h) after start / resume / reboot
+- [x] Inbox backfill (last 72h) after start / resume / reboot / alarm / pull-to-refresh
 - [x] Battery optimization + OEM auto-start guides
 - [x] High-priority SMS broadcast receiver
 
@@ -99,18 +100,19 @@ SMS is **queued first**, then forwarded. UI state never blocks capture.
 | Scenario | Behavior |
 |----------|----------|
 | **Offline** | Stored in Hive immediately; sync when network returns |
-| **App exit / swipe away** | Foreground service keeps running (`stopWithTask=false`) |
+| **App exit / swipe away** | SMS receiver still captures; default AlarmManager retries sync; optional FGS for faster retries |
 | **App lock (PIN)** | UI-only; listening + queue + forward continue |
-| **Device reboot** | FG auto-starts; inbox backfill (72h) recovers misses |
-| **Crash mid-send** | `sending` → `pending` on next start / FG tick |
+| **Device reboot** | Alarm (and optional FGS) reschedule; inbox backfill (72h) recovers misses |
+| **Crash mid-send** | `sending` → `pending` on next start / sync tick |
 | **OEM force-stop** | Cannot intercept — use battery + auto-start exemptions |
 
 ### Merchant device setup (required)
 
-1. Grant **SMS** + **notifications**  
+1. Grant **SMS** (+ **notifications** if using realtime keepalive)  
 2. Settings → **Reliability** → disable battery optimization  
 3. Run **device-specific guide** (Xiaomi / Oppo / Vivo / Samsung / Huawei auto-start)  
-4. Keep the persistent **listening** notification  
+4. Optional: enable **Realtime keepalive** for sticky notification + ~15s retries  
+5. Or leave realtime off and rely on AlarmManager interval + pull-to-refresh sync
 
 ---
 
@@ -131,6 +133,7 @@ AppSettings
   payloadTemplate
   allowedSenders, includeKeywords, excludeKeywords, filtersUseRegex
   structuredParseEnabled, forwardingEnabled
+  realtimeKeepAliveEnabled, syncIntervalMinutes
   themeMode, deviceId, appLock PIN (hashed)
 ```
 
@@ -175,10 +178,11 @@ Default POST body (template-overridable). Structured fields are merged when pars
 | `READ_SMS` | Inbox backfill after reboot / missed broadcasts |
 | `INTERNET` | Forward to API |
 | `ACCESS_NETWORK_STATE` | Detect online / offline |
-| `FOREGROUND_SERVICE` / `FOREGROUND_SERVICE_DATA_SYNC` | Keep listener + sync alive |
-| `POST_NOTIFICATIONS` | Persistent listening notification |
+| `FOREGROUND_SERVICE` / `FOREGROUND_SERVICE_DATA_SYNC` | Optional realtime keepalive |
+| `POST_NOTIFICATIONS` | Sticky notification when realtime keepalive is on |
 | `WAKE_LOCK` / `RECEIVE_BOOT_COMPLETED` | Survive doze / restart on boot |
 | `REQUEST_IGNORE_BATTERY_OPTIMIZATIONS` | Reduce OEM killing the process |
+| `SCHEDULE_EXACT_ALARM` | Available if exact alarms are used (default sync is inexact) |
 
 ---
 
@@ -189,7 +193,7 @@ Default POST body (template-overridable). Structured fields are merged when pars
 | SMS | `another_telephony` (background handler + inbox read) |
 | Local DB | Hive (`sms_queue` + `settings`) |
 | Network | `http` + `connectivity_plus` |
-| Background | `flutter_foreground_task` (15s flush tick, auto-run on boot) |
+| Background | Default: `android_alarm_manager_plus`; optional: `flutter_foreground_task` |
 | Battery / OEM | `disable_battery_optimization` |
 | Export | `share_plus` |
 | State | `ValueNotifier` + Hive `listenable` |
